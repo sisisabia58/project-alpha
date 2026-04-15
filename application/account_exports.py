@@ -161,6 +161,135 @@ def _make_sub2api_json(item: AccountRecord) -> dict:
     }
 
 
+def _make_kiro_go_account(item: AccountRecord) -> dict:
+    """Convert a Kiro AccountRecord to Kiro-Go Account JSON format."""
+    import uuid
+    import time
+
+    access_token = _credential_value(item, "accessToken", "access_token", "legacy_token")
+    refresh_token = _credential_value(item, "refreshToken", "refresh_token")
+    client_id = _credential_value(item, "clientId", "client_id")
+    client_secret = _credential_value(item, "clientSecret", "client_secret")
+    session_token = _credential_value(item, "sessionToken", "session_token")
+    oauth_provider = _credential_value(item, "oauthProvider")
+
+    # Determine auth method
+    auth_method = "idc"
+    provider = "BuilderId"
+    if oauth_provider:
+        lp = oauth_provider.lower()
+        if lp in ("google", "github"):
+            auth_method = "social"
+            provider = "Google" if lp == "google" else "GitHub"
+
+    return {
+        "id": str(uuid.uuid4()),
+        "email": item.email,
+        "nickname": item.email.split("@")[0] if item.email else "",
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "clientId": client_id,
+        "clientSecret": client_secret,
+        "authMethod": auth_method,
+        "provider": provider,
+        "region": "us-east-1",
+        "startUrl": "https://view.awsapps.com/start" if auth_method == "idc" else "",
+        "expiresAt": int(time.time()) + 3600,
+        "machineId": str(uuid.uuid4()),
+        "weight": 0,
+        "enabled": True,
+    }
+
+
+def _make_any2api_kiro_account(item: AccountRecord) -> dict:
+    """Convert a Kiro AccountRecord to Any2API KiroAccount format."""
+    import uuid
+
+    access_token = _credential_value(item, "accessToken", "access_token", "legacy_token")
+    return {
+        "id": str(uuid.uuid4()),
+        "name": item.email or f"Kiro Account",
+        "accessToken": access_token,
+        "machineId": str(uuid.uuid4()),
+        "preferredEndpoint": "",
+        "active": True,
+        "updatedAt": _isoformat(item.updated_at) or _isoformat(item.created_at) or "",
+    }
+
+
+def _make_any2api_grok_token(item: AccountRecord) -> dict:
+    """Convert a Grok AccountRecord to Any2API GrokToken format."""
+    import uuid
+
+    sso = _credential_value(item, "sso")
+    sso_rw = _credential_value(item, "sso_rw")
+    cookie_token = sso or sso_rw
+    return {
+        "id": str(uuid.uuid4()),
+        "name": item.email or "Grok Token",
+        "cookieToken": cookie_token,
+        "active": True,
+        "updatedAt": _isoformat(item.updated_at) or _isoformat(item.created_at) or "",
+    }
+
+
+def _build_any2api_admin_config(items: list[AccountRecord]) -> dict:
+    """Build an Any2API admin.json from a list of accounts (multi-platform)."""
+    kiro_accounts = []
+    grok_tokens = []
+    cursor_config = {}
+    blink_config = {}
+    chatgpt_config = {}
+
+    for item in items:
+        if item.platform == "kiro":
+            kiro_accounts.append(_make_any2api_kiro_account(item))
+        elif item.platform == "grok":
+            grok_tokens.append(_make_any2api_grok_token(item))
+        elif item.platform == "cursor":
+            # Cursor uses a single cookie-based config, take the last one
+            token = _credential_value(item, "session_token", "sessionToken", "wos_session", "legacy_token")
+            if token:
+                cursor_config = {"cookie": f"WorkosCursorSessionToken={token}"}
+        elif item.platform == "blink":
+            refresh = _credential_value(item, "firebase_refresh_token", "refresh_token", "refreshToken")
+            id_token = _credential_value(item, "id_token", "idToken")
+            session = _credential_value(item, "session_token", "sessionToken")
+            slug = _credential_value(item, "workspace_slug", "workspaceSlug")
+            if refresh or id_token:
+                blink_config = {
+                    "refreshToken": refresh,
+                    "idToken": id_token,
+                    "sessionToken": session,
+                    "workspaceSlug": slug,
+                }
+        elif item.platform == "chatgpt":
+            token = _credential_value(item, "access_token", "accessToken", "legacy_token")
+            if token:
+                chatgpt_config = {"token": token}
+
+    providers = {}
+    if kiro_accounts:
+        providers["kiroAccounts"] = kiro_accounts
+    if grok_tokens:
+        providers["grokTokens"] = grok_tokens
+    if cursor_config:
+        providers["cursorConfig"] = cursor_config
+    if blink_config:
+        providers["blinkConfig"] = blink_config
+    if chatgpt_config:
+        providers["chatgptConfig"] = chatgpt_config
+
+    return {
+        "settings": {
+            "adminPassword": "changeme",
+            "apiKey": "0000",
+            "defaultProvider": "kiro" if kiro_accounts else "cursor",
+        },
+        "providers": providers,
+    }
+
+
 class AccountExportsService:
     def __init__(self, repository: AccountsRepository | None = None):
         self.repository = repository or AccountsRepository()
@@ -301,3 +430,40 @@ class AccountExportsService:
         if selection.platform != CHATGPT_PLATFORM:
             raise ValueError("仅支持 ChatGPT 账号导出")
         return self.repository.select_for_export(selection)
+
+    # ------------------------------------------------------------------
+    # Kiro → Kiro-Go CLI Proxy export
+    # ------------------------------------------------------------------
+
+    def export_kiro_go(self, selection: AccountExportSelection) -> ExportArtifact:
+        """导出 Kiro 账号为 Kiro-Go CLI Proxy 兼容的 config.json 格式。"""
+        selection.platform = "kiro"
+        items = self.repository.select_for_export(selection)
+        accounts = [_make_kiro_go_account(item) for item in items]
+        config = {
+            "password": "changeme",
+            "port": 8080,
+            "host": "0.0.0.0",
+            "requireApiKey": False,
+            "accounts": accounts,
+        }
+        content = json.dumps(config, ensure_ascii=False, indent=2)
+        return ExportArtifact(
+            filename=_timestamp_name("kiro_go_config", "json"),
+            media_type="application/json",
+            content=content,
+        )
+
+    def export_any2api(self, selection: AccountExportSelection) -> ExportArtifact:
+        """导出账号为 Any2API admin.json 兼容格式。
+
+        支持多平台：Kiro → kiroAccounts, Grok → grokTokens, Cursor/Blink/ChatGPT → 对应 config。
+        """
+        items = self.repository.select_for_export(selection)
+        admin_config = _build_any2api_admin_config(items)
+        content = json.dumps(admin_config, ensure_ascii=False, indent=2)
+        return ExportArtifact(
+            filename=_timestamp_name("any2api_admin", "json"),
+            media_type="application/json",
+            content=content,
+        )

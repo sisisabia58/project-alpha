@@ -175,6 +175,40 @@ def export_accounts_cpa(body: BatchExportRequest):
     return _stream_artifact(artifact)
 
 
+@router.post("/export/kiro-go")
+def export_accounts_kiro_go(body: BatchExportRequest):
+    try:
+        artifact = exports_service.export_kiro_go(
+            AccountExportSelection(
+                platform="kiro",
+                ids=body.ids,
+                select_all=body.select_all,
+                status_filter=body.status_filter or "",
+                search_filter=body.search_filter or "",
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _stream_artifact(artifact)
+
+
+@router.post("/export/any2api")
+def export_accounts_any2api(body: BatchExportRequest):
+    try:
+        artifact = exports_service.export_any2api(
+            AccountExportSelection(
+                platform=body.platform,
+                ids=body.ids,
+                select_all=body.select_all,
+                status_filter=body.status_filter or "",
+                search_filter=body.search_filter or "",
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _stream_artifact(artifact)
+
+
 @router.post("/import")
 def import_accounts(body: ImportRequest):
     return service.import_accounts(body.platform, body.lines)

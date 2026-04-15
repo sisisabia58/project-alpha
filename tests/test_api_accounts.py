@@ -84,3 +84,27 @@ def test_account_stats(client):
     _create_account(client)
     resp = client.get("/api/accounts/stats")
     assert resp.status_code == 200
+
+
+def test_export_kiro_go(client):
+    # Create a kiro account first
+    client.post("/api/accounts", json={
+        "platform": "kiro",
+        "email": "kiro@test.com",
+        "password": "",
+    })
+    resp = client.post("/api/accounts/export/kiro-go", json={
+        "platform": "kiro",
+        "select_all": True,
+    })
+    assert resp.status_code == 200
+    assert "kiro_go_config" in resp.headers.get("content-disposition", "")
+
+
+def test_export_any2api_multi_platform(client):
+    client.post("/api/accounts", json={"platform": "kiro", "email": "k@test.com", "password": ""})
+    client.post("/api/accounts", json={"platform": "grok", "email": "g@test.com", "password": ""})
+    client.post("/api/accounts", json={"platform": "cursor", "email": "c@test.com", "password": ""})
+    resp = client.post("/api/accounts/export/any2api", json={"select_all": True})
+    assert resp.status_code == 200
+    assert "any2api_admin" in resp.headers.get("content-disposition", "")
