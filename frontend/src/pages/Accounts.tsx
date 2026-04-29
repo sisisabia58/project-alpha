@@ -157,23 +157,6 @@ async function loadPlatformActions(platform: string, options?: { force?: boolean
   return pending
 }
 
-async function loadPlatformCapabilities(platform: string, options?: { force?: boolean }) {
-  const key = String(platform || '').trim()
-  if (!key) return []
-  const force = Boolean(options?.force)
-  
-  try {
-    const data = await apiFetch(`/actions/${key}/capabilities`)
-    return Array.isArray(data) ? data : []
-  } catch (error) {
-    console.warn('Failed to load capabilities, falling back to actions')
-    // Fallback to actions for backward compatibility
-    const actions = await loadPlatformActions(platform, options)
-    return actions.map(action => action.id)
-  }
-}
-
-
 function buildActionParamDraft(action: any, acc: any) {
   const params = Array.isArray(action?.params) ? action.params : []
   const emailPrefix = String(acc?.email || '').split('@')[0] || 'Development'
@@ -590,22 +573,6 @@ function DisplayMetricCard({ metric, compact = false }: { metric: any; compact?:
       </div>
       {typeof metric?.percent === 'number' ? (
         <div className="relative mt-3 h-1.5 overflow-hidden rounded-full bg-black/25">
-          <div className={`h-full rounded-full bg-gradient-to-r ${metricAccentClass(metric?.tone)}`} style={{ width: `${Math.max(0, Math.min(100, metric.percent))}%` }} />
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function DisplayMetricPill({ metric }: { metric: any }) {
-  return (
-    <div className={`min-w-0 rounded-full border px-2.5 py-1 ${metricToneClass(metric?.tone)}`}>
-      <div className="flex min-w-0 items-center gap-2 text-[11px]">
-        <span className="truncate opacity-70">{metric?.label || '-'}</span>
-        <span className="shrink-0 font-semibold">{formatResultValue(metric?.value)}</span>
-      </div>
-      {typeof metric?.percent === 'number' ? (
-        <div className="mt-1 h-1 overflow-hidden rounded-full bg-black/25">
           <div className={`h-full rounded-full bg-gradient-to-r ${metricAccentClass(metric?.tone)}`} style={{ width: `${Math.max(0, Math.min(100, metric.percent))}%` }} />
         </div>
       ) : null}
@@ -1540,31 +1507,6 @@ function ExportMenu({
   )
 }
 
-function WorkspaceMetric({
-  label,
-  value,
-  icon: Icon,
-}: {
-  label: string
-  value: string | number
-  icon: any
-}) {
-  return (
-    <div className="rounded-[16px] border border-[var(--border)] bg-[var(--bg-pane)]/58 px-3 py-2.5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-[11px] tracking-[0.16em] text-[var(--text-muted)]">{label}</div>
-          <div className="mt-0.5 text-lg font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{value}</div>
-        </div>
-        <div className="flex h-8 w-8 items-center justify-center rounded-[12px] border border-[var(--border-soft)] bg-[var(--chip-bg)] text-[var(--accent)]">
-          <Icon className="h-3.5 w-3.5" />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-
 // ── Main ────────────────────────────────────────────────────
 export default function Accounts() {
   const { platform } = useParams<{ platform: string }>()
@@ -1680,7 +1622,6 @@ export default function Accounts() {
   const visibleSubscribed = accounts.filter(acc => getPlanState(acc) === 'subscribed').length
   const visibleInvalid = accounts.filter(acc => getValidityStatus(acc) === 'invalid' || getLifecycleStatus(acc) === 'invalid').length
   const linkedCashier = accounts.filter(acc => Boolean(getCashierUrl(acc))).length
-  const verificationBacked = accounts.filter(acc => Boolean(getVerificationMailbox(acc)?.email)).length
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">

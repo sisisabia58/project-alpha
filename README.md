@@ -8,11 +8,11 @@
 
 ## 功能特性
 
-- **多平台支持**：ChatGPT、Cursor、Kiro、Trae.ai、Tavily、Grok、Blink、Cerebras、OpenBlockLabs，支持自定义插件扩展（Anything 通用适配器）
-- **多邮箱服务**：MoeMail（自建）、Laoudo、DuckMail、Testmail、Cloudflare Worker 自建邮箱、Freemail、TempMail.lol、Temp-Mail Web
+- **多平台支持**：ChatGPT、Cursor、Kiro、Trae.ai、Tavily、Grok、Blink、Cerebras、OpenBlockLabs、Windsurf，支持自定义插件扩展（Anything 通用适配器）
+- **多邮箱服务**：MoeMail（自建）、Laoudo、DuckMail、Testmail、Cloudflare Worker 自建邮箱、Freemail、TempMail.lol、Temp-Mail Web、DuckDuckGo Email
 - **多执行模式**：API 协议（无浏览器）、无头浏览器、有头浏览器（各平台按需支持）
 - **验证码服务**：YesCaptcha、2Captcha、本地 Solver（Camoufox）
-- **接码服务**：SMS-Activate（支持全球手机号租用，用于需要手机验证的平台）
+- **接码服务**：SMS-Activate、HeroSMS（用于需要手机验证的平台）
 - **代理池管理**：静态代理轮询 + 动态代理 API 提取 + 旋转网关代理，成功率统计、自动禁用失效代理
 - **账号生命周期**：定时有效性检测、token 自动续期、trial 过期预警
 - **注册成功率仪表盘**：按平台、按天、按代理的成功率统计，错误聚合分析
@@ -159,14 +159,14 @@ docker compose up -d --build
 
 ## 邮箱服务配置
 
-注册时需要选择一种邮箱服务用于接收验证码。当前版本的邮箱和验证码配置都由后端 provider catalog 驱动，前端“全局配置”页已经改成列表式 CRUD：
+注册时需要选择一种邮箱服务用于接收验证码。当前版本的邮箱、验证码和接码配置都由后端 provider catalog 驱动，前端“全局配置”页已经改成列表式 CRUD：
 
 - 左侧显示已添加的 provider 配置
 - 右侧统一编辑名称、认证方式和字段
 - “新增 Provider”下拉框只展示后端当前已接入但尚未加入的 provider
 - 后端新增 provider 后，前端无需写死选项，刷新页面即可出现
 
-目前数据库模型仍是 `provider_type + provider_key` 唯一，也就是每种 provider 保留一条配置；这套结构适合持续扩展新的 mailbox/captcha provider。
+目前数据库模型仍是 `provider_type + provider_key` 唯一，也就是每种 provider 保留一条配置；这套结构适合持续扩展新的 mailbox/captcha/sms provider。
 
 ### MoeMail（推荐）
 
@@ -209,6 +209,10 @@ docker compose up -d --build
 
 基于 web2.temp-mail.org 的临时邮箱服务，无需配置。
 
+### DuckDuckGo Email
+
+使用 DuckDuckGo Email Protection 生成 `@duck.com` 私密别名，并通过转发邮箱读取验证码。需要在全局配置中填写转发邮箱的 IMAP 信息。
+
 ### Freemail
 
 基于 Cloudflare Worker 自建的邮箱服务，支持管理员令牌和用户名密码两种认证方式。
@@ -245,22 +249,22 @@ docker compose up -d --build
 
 ## 代理池配置
 
-系统支持两种代理模式，可同时使用：
+系统支持静态代理池，并保留动态代理驱动能力：
 
 ### 静态代理
 
 在代理管理页手动添加固定代理地址，系统按成功率加权轮询。连续失败 5 次的代理自动禁用。
 
-### 动态代理（API 提取）
+### 动态代理驱动
 
-在全局配置页添加 proxy provider，系统每次注册时自动从 API 获取新代理：
+后端内置两类动态代理驱动；如果数据库中已配置并启用 `proxy` provider，注册时会优先尝试动态代理，失败或未配置时自动回退到静态代理池。
 
 | Provider | 说明 |
 |----------|------|
 | API 提取代理 | 通过 HTTP API 动态提取代理 IP，适用于大多数代理商的 API 提取接口 |
 | 旋转网关代理 | 固定入口地址，每次请求自动分配不同出口 IP，适用于 BrightData、Oxylabs、IPRoyal 等 |
 
-动态代理优先于静态代理。未配置动态代理时自动回退到静态代理池。
+当前 Web UI 主要提供静态代理池管理；动态代理 provider 可通过后端 provider settings 扩展配置。
 
 ## 接码服务配置
 
@@ -268,7 +272,15 @@ docker compose up -d --build
 
 | 服务 | 说明 |
 |------|------|
-| SMS-Activate | 需填写 API Key，在 [sms-activate.guru](https://sms-activate.guru) 注册获取，支持全球手机号 |
+| SMS-Activate | 需填写 API Key，可配置默认国家 |
+| HeroSMS | 需填写 API Key，可配置服务代码、国家 ID、最高单价、号码复用策略 |
+
+添加方法：
+
+1. 打开 Web UI 的“全局配置”页面，进入“接码服务”。
+2. 点击“新增接码 Provider”，选择 `SMS-Activate` 或 `HeroSMS`。
+3. 填写 API Key 等字段，保存并按需设为默认。
+4. 注册任务会优先使用任务参数里的 `sms_provider`；未指定时使用默认接码 Provider。
 
 ## 账号生命周期管理
 
@@ -317,6 +329,7 @@ docker compose up -d --build
 | Cursor | `cursorConfig` cookie |
 | ChatGPT | `chatgptConfig` token |
 | Blink | `blinkConfig` 凭证 |
+| Windsurf | `windsurfAccounts` 账号池 |
 
 未配置 `any2api_url` 时此功能静默跳过，不影响正常注册。
 
@@ -359,7 +372,7 @@ account_manager/
 │   ├── base_platform.py    # 平台基类
 │   ├── base_mailbox.py     # 邮箱服务基类 + 工厂方法
 │   ├── base_captcha.py     # 验证码服务基类
-│   ├── base_sms.py         # 接码服务基类 + SMS-Activate
+│   ├── base_sms.py         # 接码服务基类 + SMS-Activate / HeroSMS
 │   ├── base_identity.py    # 身份提供者基类
 │   ├── registration/       # 注册流程编排（适配器 + 流程）
 │   ├── lifecycle.py        # 账号生命周期管理
@@ -378,9 +391,11 @@ account_manager/
 │       ├── browser_oauth.py    # 浏览器 OAuth（按需）
 │       ├── core.py             # 平台协议核心逻辑（按需）
 │       └── switch.py           # 账号切换逻辑（按需）
-├── resources/              # 静态配置
-│   ├── platform_capabilities.json
-│   └── provider_driver_templates.json
+├── providers/              # Provider 插件层（邮箱 / 验证码 / 接码 / 代理驱动）
+│   ├── mailbox/
+│   ├── captcha/
+│   ├── sms/
+│   └── proxy/
 ├── services/               # 后台服务
 │   ├── solver_manager.py   # Turnstile Solver 进程管理
 │   └── task_runtime.py     # 持久化任务执行器
@@ -455,16 +470,14 @@ class MyPlatform(BasePlatform):
 
 ### 3. 声明平台能力
 
-在 `resources/platform_capabilities.json` 中添加：
+平台能力优先使用插件类属性声明，也可以在 Web UI 的“平台能力”页面覆盖：
 
-```json
-{
-  "myplatform": {
-    "supported_executors": ["protocol"],
-    "supported_identity_modes": ["mailbox"],
-    "supported_oauth_providers": []
-  }
-}
+```python
+class MyPlatform(BasePlatform):
+    supported_executors = ["protocol"]
+    supported_identity_modes = ["mailbox"]
+    supported_oauth_providers = []
+    capabilities = []
 ```
 
 系统启动时会自动扫描 `platforms/` 目录加载所有带 `@register` 装饰器的插件。
@@ -496,6 +509,32 @@ python3 -m camoufox fetch
 ```
 
 浏览器模式支持 `headless`（无头）和 `headed`（有头）两种，在注册页的执行器选项中选择即可。
+
+### Solver 启动超时怎么办？
+
+`[Solver] 启动超时` 表示本地 Turnstile Solver 在 30 秒内没有通过健康检查，主服务仍然会继续启动。常见原因是首次启动需要下载或初始化 Camoufox、当前环境缺少浏览器依赖，或 8889 端口被占用。
+
+处理方式：
+
+1. 本地先执行 `python3 -m camoufox fetch`，然后在“全局配置”页点击“重启 Solver”。
+2. 如果不依赖本地 Solver，可以配置 YesCaptcha 或 2Captcha，并在注册任务中选择远程验证码服务。
+3. Docker 环境建议使用已构建镜像运行；本地裸跑时若持续超时，优先检查 8889 端口和 Camoufox 安装。
+
+### ARM 镜像构建失败怎么办？
+
+如果日志里出现 `src/pages/Accounts.tsx ... TS6133/TS7006`，实际失败点是前端 TypeScript 构建，不是 ARM 或 apt 安装问题。先在本地执行：
+
+```bash
+cd frontend
+npm run build
+```
+
+确认前端构建通过后再执行：
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
 
 ## 参与贡献
 

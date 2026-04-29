@@ -6,8 +6,7 @@ import re
 import threading
 from typing import Optional
 
-import requests
-
+import core.proxy_providers as proxy_providers
 from core.proxy_providers import BaseProxyProvider
 from providers.registry import register_provider
 
@@ -55,7 +54,7 @@ class ApiExtractProvider(BaseProxyProvider):
     def _fetch(self) -> list[str]:
         """从 API 获取代理列表。"""
         try:
-            resp = requests.get(self.api_url, timeout=self.timeout)
+            resp = proxy_providers.requests.get(self.api_url, timeout=self.timeout)
             resp.raise_for_status()
             text = resp.text.strip()
         except Exception as exc:

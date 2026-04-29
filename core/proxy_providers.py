@@ -4,14 +4,15 @@
   1. 静态代理: 从数据库读取固定代理列表（现有逻辑）
   2. 动态代理: 从第三方 API 实时获取代理 IP
 
-动态代理 provider 通过 provider_settings 配置，和邮箱/验证码 provider 一样
-在前端"全局配置"页管理。
+动态代理 provider 通过 provider_settings 配置；如果未配置则自动回退到静态代理池。
 """
 from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,8 @@ def create_proxy_provider(provider_key: str, config: dict) -> BaseProxyProvider:
         api_url = config.get("proxy_api_url", "")
         if not api_url:
             raise RuntimeError("动态代理未配置 API URL")
-        return ApiExtractProvider(
+        provider_cls = __getattr__("ApiExtractProvider")
+        return provider_cls(
             api_url=api_url,
             protocol=config.get("proxy_protocol", "http"),
             username=config.get("proxy_username", ""),
@@ -66,7 +68,8 @@ def create_proxy_provider(provider_key: str, config: dict) -> BaseProxyProvider:
         gateway = config.get("proxy_gateway_url", "")
         if not gateway:
             raise RuntimeError("旋转代理未配置网关地址")
-        return RotatingProxyProvider(gateway_url=gateway)
+        provider_cls = __getattr__("RotatingProxyProvider")
+        return provider_cls(gateway_url=gateway)
 
     raise RuntimeError(f"未知的代理 provider: {provider_key}")
 
@@ -79,7 +82,7 @@ def get_dynamic_proxy(extra: dict | None = None) -> Optional[str]:
     try:
         from infrastructure.provider_settings_repository import ProviderSettingsRepository
         repo = ProviderSettingsRepository()
-        settings = repo.list(provider_type="proxy")
+        settings = repo.list_enabled("proxy")
         for setting in settings:
             if not setting.enabled:
                 continue
