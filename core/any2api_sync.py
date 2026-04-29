@@ -156,6 +156,16 @@ class Any2ApiClient:
         })
         return result is not None
 
+    def push_windsurf(self, api_key: str, *, name: str = "", proxy_url: str = "") -> bool:
+        result = self._post("/admin/api/providers/windsurf/accounts/create", {
+            "id": str(uuid.uuid4()),
+            "name": name or "Auto Register",
+            "apiKey": api_key,
+            "proxyUrl": proxy_url,
+            "active": True,
+        })
+        return result is not None
+
 
 def _get_any2api_config() -> tuple[str, str]:
     """从全局配置读取 Any2API 地址和密码。"""
@@ -233,6 +243,43 @@ def push_account_to_any2api(account: Any, *, log_fn=None) -> bool:
                 )
                 if ok:
                     log(f"  [Any2API] ✓ Blink 账号已推送")
+                return ok
+
+        elif platform == "windsurf":
+            # Windsurf LS apiKey is the Codeium synthetic_api_key, which lives
+            # deep in state_summary → remote_user or account_overview → remote_user.
+            # Alternatively, a session_token prefixed with "devin-session-token$"
+            # also works as apiKey for the LS.
+            api_key = (
+                extra.get("api_key", "")
+                or extra.get("apiKey", "")
+                or extra.get("synthetic_api_key", "")
+            )
+            if not api_key:
+                # Dig into state_summary → remote_user → synthetic_api_key
+                for container_key in ("state_summary", "account_overview"):
+                    container = dict(extra.get(container_key) or {})
+                    remote_user = dict(container.get("remote_user") or {})
+                    api_key = str(remote_user.get("synthetic_api_key", "") or "").strip()
+                    if api_key:
+                        break
+            if not api_key:
+                # Fall back to session_token (LS accepts "devin-session-token$<JWT>" as apiKey)
+                session_token = (
+                    extra.get("session_token", "")
+                    or extra.get("sessionToken", "")
+                    or getattr(account, "token", "")
+                )
+                if session_token:
+                    api_key = session_token
+            if api_key:
+                ok = client.push_windsurf(
+                    api_key,
+                    name=email,
+                    proxy_url=extra.get("proxy_url", "") or extra.get("proxyUrl", ""),
+                )
+                if ok:
+                    log(f"  [Any2API] ✓ Windsurf 账号已推送")
                 return ok
 
         else:

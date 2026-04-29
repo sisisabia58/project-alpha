@@ -216,10 +216,17 @@ def generate_oauth_url(
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
         "prompt": "login",
-        "id_token_add_organizations": "true",
-        "codex_cli_simplified_flow": "true",
     }
-    auth_url = f"{OAUTH_AUTH_URL}?{urllib.parse.urlencode(params)}"
+    # Codex CLI 使用 Hydra endpoint (/oauth/authorize)
+    from .constants import CODEX_CLIENT_ID, OPENAI_AUTH
+    if client_id == CODEX_CLIENT_ID:
+        params["id_token_add_organizations"] = "true"
+        params["codex_cli_simplified_flow"] = "true"
+        base_url = f"{OPENAI_AUTH}/oauth/authorize"
+    else:
+        params["screen_hint"] = "login_or_signup"
+        base_url = OAUTH_AUTH_URL
+    auth_url = f"{base_url}?{urllib.parse.urlencode(params)}"
     return OAuthStart(
         auth_url=auth_url,
         state=state,

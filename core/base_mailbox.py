@@ -176,6 +176,16 @@ def _create_duckmail(extra: dict, proxy: str | None) -> 'BaseMailbox':
     )
 
 
+def _create_ddg_email(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return DDGEmailMailbox(
+        bearer=extra.get("ddg_bearer", ""),
+        imap_host=extra.get("ddg_imap_host", ""),
+        imap_user=extra.get("ddg_imap_user", ""),
+        imap_pass=extra.get("ddg_imap_pass", ""),
+        proxy=proxy,
+    )
+
+
 def _create_freemail(extra: dict, proxy: str | None) -> 'BaseMailbox':
     return FreemailMailbox(
         api_url=extra.get("freemail_api_url", ""),
@@ -238,6 +248,8 @@ MAILBOX_FACTORY_REGISTRY = {
     "tempmail_lol_api": _create_tempmail,
     "tempmail_web_api": _create_tempmail_web,
     "duckmail_api": _create_duckmail,
+    "ddg_email": _create_ddg_email,
+    "ddg_email_api": _create_ddg_email,
     "freemail_api": _create_freemail,
     "moemail_api": _create_moemail,
     "cfworker_admin_api": _create_cfworker,
@@ -1772,3 +1784,175 @@ class TestmailMailbox(BaseMailbox):
                 pass
             time.sleep(3)
         raise TimeoutError(f"等待验证链接超时 ({timeout}s)")
+
+
+class DDGEmailMailbox(BaseMailbox):
+    """DuckDuckGo Email Protection — 生成 @duck.com 私密别名，通过 IMAP 从转发邮箱读取验证码"""
+
+    DDG_API = "https://quack.duckduckgo.com/api/email/addresses"
+
+    # 常见邮箱 IMAP 地址自动匹配
+    _IMAP_HOSTS = {
+        "163.com": "imap.163.com",
+        "126.com": "imap.126.com",
+        "qq.com": "imap.qq.com",
+        "gmail.com": "imap.gmail.com",
+        "outlook.com": "imap-mail.outlook.com",
+        "hotmail.com": "imap-mail.outlook.com",
+        "yahoo.com": "imap.mail.yahoo.com",
+    }
+
+    def __init__(self, bearer: str = "", imap_host: str = "",
+                 imap_user: str = "", imap_pass: str = "", proxy: str = None):
+        self.bearer = bearer
+        self.imap_host = imap_host
+        self.imap_user = imap_user
+        self.imap_pass = imap_pass
+        self.proxy = {"http": proxy, "https": proxy} if proxy else None
+
+        # 自动推断 IMAP host
+        if not self.imap_host and self.imap_user and "@" in self.imap_user:
+            domain = self.imap_user.split("@", 1)[1].lower()
+            self.imap_host = self._IMAP_HOSTS.get(domain, f"imap.{domain}")
+
+    def _headers(self) -> dict:
+        return {
+            "authorization": f"Bearer {self.bearer}",
+            "origin": "https://duckduckgo.com",
+            "referer": "https://duckduckgo.com/",
+        }
+
+    def get_email(self) -> MailboxAccount:
+        import requests
+        r = insecure_request(
+            requests.post, self.DDG_API,
+            headers=self._headers(),
+            proxies=self.proxy,
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+        address = data.get("address", "")
+        if not address:
+            raise RuntimeError(f"DDG Email 创建别名失败: {r.text[:200]}")
+        email = f"{address}@duck.com"
+        print(f"[DDG Email] 创建别名: {email}")
+        return MailboxAccount(
+            email=email,
+            account_id=address,
+            extra={
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "ddg_email",
+                    "resource_type": "mailbox",
+                    "resource_identifier": address,
+                    "handle": email,
+                    "display_name": email,
+                },
+            },
+        )
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        return set()
+
+    def _imap_search_code(self, alias_email: str, timeout: int, code_pattern: str = None) -> str:
+        import imaplib
+        import email as email_lib
+        import time
+
+        if not self.imap_user or not self.imap_pass:
+            raise RuntimeError("DDG Email 未配置 IMAP（ddg_imap_user / ddg_imap_pass），无法读取验证码")
+
+        pattern = code_pattern or r'(?<!\d)(\d{6})(?!\d)'
+        start = time.time()
+        seen_ids: set[bytes] = set()
+        baseline_done = False
+
+        while time.time() - start < timeout:
+            conn = None
+            try:
+                conn = imaplib.IMAP4_SSL(self.imap_host, 993, timeout=10)
+                # 163/126 要求先发 ID 命令
+                if any(h in self.imap_host for h in ("163.com", "126.com", "yeah.net")):
+                    imaplib.Commands['ID'] = ('NONAUTH', 'AUTH', 'SELECTED')
+                    conn._simple_command('ID', '("name" "IMAPClient" "version" "1.0")')
+                conn.login(self.imap_user, self.imap_pass)
+                conn.select("INBOX", readonly=True)
+
+                _, msg_nums = conn.search(None, "ALL")
+                ids = msg_nums[0].split() if msg_nums and msg_nums[0] else []
+
+                # 首次轮询：把所有已有邮件标记为已读，只等新邮件
+                if not baseline_done:
+                    seen_ids = set(ids)
+                    baseline_done = True
+                    print(f"[DDG Email] IMAP baseline: {len(seen_ids)} existing emails skipped")
+                    conn.logout()
+                    conn = None
+                    time.sleep(5)
+                    continue
+
+                for mid in reversed(ids[-30:]):
+                    if mid in seen_ids:
+                        continue
+                    seen_ids.add(mid)
+
+                    _, msg_data = conn.fetch(mid, "(RFC822)")
+                    if not msg_data or not msg_data[0]:
+                        continue
+                    raw = msg_data[0][1]
+                    msg = email_lib.message_from_bytes(raw)
+
+                    # 检查是否是发给 alias 的（DDG 转发会保留原始 To）
+                    to_addr = str(msg.get("To", "") or "").lower()
+                    from_addr = str(msg.get("From", "") or "").lower()
+                    subject = str(msg.get("Subject", "") or "")
+
+                    # 只看发给 alias 或来自 openai/noreply 的
+                    if alias_email.lower() not in to_addr and "openai" not in from_addr and "noreply" not in from_addr:
+                        continue
+
+                    # 提取正文
+                    body_parts = []
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            ct = part.get_content_type()
+                            if ct in ("text/plain", "text/html"):
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    charset = part.get_content_charset() or "utf-8"
+                                    body_parts.append(payload.decode(charset, errors="replace"))
+                    else:
+                        payload = msg.get_payload(decode=True)
+                        if payload:
+                            charset = msg.get_content_charset() or "utf-8"
+                            body_parts.append(payload.decode(charset, errors="replace"))
+
+                    combined = subject + " " + " ".join(body_parts)
+                    # 去掉 style/script 标签内容，避免匹配 CSS 颜色值如 #000000
+                    combined = re.sub(r'<style[^>]*>.*?</style>', '', combined, flags=re.DOTALL | re.IGNORECASE)
+                    combined = re.sub(r'<script[^>]*>.*?</script>', '', combined, flags=re.DOTALL | re.IGNORECASE)
+                    combined = re.sub(r'<[^>]+>', ' ', combined)
+                    m = re.search(pattern, combined)
+                    if m:
+                        code = m.group(1) if m.groups() else m.group(0)
+                        print(f"[DDG Email] IMAP 获取验证码: {code}")
+                        return code
+
+                conn.logout()
+            except (imaplib.IMAP4.error, OSError) as e:
+                print(f"[DDG Email] IMAP 连接异常: {e}")
+            finally:
+                if conn:
+                    try:
+                        conn.logout()
+                    except Exception:
+                        pass
+            time.sleep(5)
+
+        raise TimeoutError(f"DDG Email IMAP 等待验证码超时 ({timeout}s)")
+
+    def wait_for_code(self, account: MailboxAccount, keyword: str = "",
+                      timeout: int = 120, before_ids: set = None,
+                      code_pattern: str = None) -> str:
+        return self._imap_search_code(account.email, timeout, code_pattern)

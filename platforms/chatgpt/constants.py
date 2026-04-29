@@ -56,11 +56,17 @@ CHATGPT_APP = os.environ.get("CHATGPT_APP_URL", "https://chatgpt.com")
 PLATFORM_LOGIN_ENTRY = os.environ.get("PLATFORM_LOGIN_ENTRY", "https://platform.openai.com/login")
 
 # OAuth 参数（支持通过环境变量覆盖）
-OAUTH_CLIENT_ID = os.environ.get("OAUTH_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
-OAUTH_AUTH_URL = f"{OPENAI_AUTH}/oauth/authorize"
+# 注册阶段使用 ChatGPT Web client（无 add_phone 要求）
+OAUTH_CLIENT_ID = os.environ.get("OAUTH_CLIENT_ID", "app_X8zY6vW2pQ9tR3dE7nK1jL5gH")
+OAUTH_AUTH_URL = f"{OPENAI_AUTH}/api/accounts/authorize"
 OAUTH_TOKEN_URL = f"{OPENAI_AUTH}/oauth/token"
-OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback"
-OAUTH_SCOPE = "openid email profile offline_access"
+OAUTH_REDIRECT_URI = "https://chatgpt.com/api/auth/callback/openai"
+OAUTH_SCOPE = "openid email profile offline_access model.request model.read organization.read organization.write"
+
+# Token 获取使用 Codex CLI client（公开客户端，支持 PKCE）
+CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+CODEX_REDIRECT_URI = "http://localhost:1455/auth/callback"
+CODEX_SCOPE = "openid email profile offline_access"
 
 # Sentinel（PoW 防护）- 版本号可能随 OpenAI 更新而变化（支持通过环境变量覆盖）
 SENTINEL_BASE = os.environ.get("SENTINEL_BASE_URL", "https://sentinel.openai.com")

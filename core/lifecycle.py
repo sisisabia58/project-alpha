@@ -261,6 +261,197 @@ def flag_expiring_trials(
 
 
 # ---------------------------------------------------------------------------
+# ChatGPT token refresh + CPA sync + liveness check
+# ---------------------------------------------------------------------------
+
+def refresh_and_sync_cpa(
+    *,
+    platform: str = "chatgpt",
+    limit: int = 200,
+    log_fn=None,
+) -> dict[str, int]:
+    """
+    刷新 ChatGPT 账号 token，检查存活状态，重新上传到 CPA。
+    - 用 session_token 刷新 access_token
+    - 用 /backend-api/me 检查存活
+    - 存活账号重新生成 CPA JSON 并上传
+    - 封禁账号标记为 disabled
+    """
+    log = log_fn or logger.info
+    results = {"refreshed": 0, "uploaded": 0, "dead": 0, "skipped": 0, "error": 0}
+
+    from curl_cffi import requests as cffi_requests
+    import json
+    import base64
+
+    def _decode_jwt(token: str) -> dict:
+        try:
+            parts = token.split(".")
+            if len(parts) != 3:
+                return {}
+            payload = parts[1]
+            pad = 4 - len(payload) % 4
+            if pad != 4:
+                payload += "=" * pad
+            return json.loads(base64.urlsafe_b64decode(payload))
+        except Exception:
+            return {}
+
+    # 读取 CPA 配置
+    try:
+        from core.config_store import config_store
+        cpa_api_url = config_store.get("cpa_api_url", "")
+        cpa_api_key = config_store.get("cpa_api_key", "")
+    except Exception:
+        cpa_api_url, cpa_api_key = "", ""
+
+    # 获取所有活跃 chatgpt 账号
+    with Session(engine) as session:
+        q = select(AccountModel).where(AccountModel.platform == platform)
+        q = q.order_by(AccountModel.created_at.desc()).limit(limit)
+        accounts = session.exec(q).all()
+        graphs = load_account_graphs(session, [int(a.id) for a in accounts if a.id])
+
+    active_statuses = {"registered", "trial", "subscribed"}
+
+    for acc in accounts:
+        graph = graphs.get(int(acc.id or 0), {})
+        if graph.get("lifecycle_status") not in active_statuses:
+            results["skipped"] += 1
+            continue
+
+        credentials = {
+            c["key"]: c["value"]
+            for c in (graph.get("credentials") or [])
+            if c.get("scope") == "platform"
+        }
+        session_token = credentials.get("session_token", "")
+        if not session_token:
+            results["skipped"] += 1
+            continue
+
+        try:
+            # 1. 用 session_token 刷新 access_token
+            proxy = credentials.get("proxy", None)
+            s = cffi_requests.Session(impersonate="chrome120", proxy=proxy)
+            s.cookies.set("__Secure-next-auth.session-token", session_token,
+                          domain=".chatgpt.com", path="/")
+            resp = s.get("https://chatgpt.com/api/auth/session",
+                         headers={"accept": "application/json"}, timeout=30)
+
+            if resp.status_code != 200:
+                log(f"  ✗ {acc.email}: session 刷新失败 HTTP {resp.status_code}")
+                results["error"] += 1
+                continue
+
+            data = resp.json()
+            access_token = data.get("accessToken", "")
+            if not access_token:
+                log(f"  ✗ {acc.email}: 无 accessToken")
+                results["error"] += 1
+                continue
+
+            results["refreshed"] += 1
+
+            # 更新 credential
+            new_session = s.cookies.get("__Secure-next-auth.session-token") or session_token
+            credential_updates = {"access_token": access_token}
+            if new_session != session_token:
+                credential_updates["session_token"] = new_session
+            # id_token = access_token (NextAuth 没有独立 id_token)
+            credential_updates["id_token"] = access_token
+
+            with Session(engine) as sess:
+                model = sess.get(AccountModel, acc.id)
+                if model:
+                    model.updated_at = _utcnow()
+                    patch_account_graph(
+                        sess, model,
+                        credential_updates=credential_updates,
+                        summary_updates={"last_refresh_at": _utcnow_iso(), "refresh_success": True},
+                    )
+                    sess.add(model)
+                    sess.commit()
+
+            # 2. 检查存活
+            check_resp = cffi_requests.get(
+                "https://chatgpt.com/backend-api/me",
+                headers={"authorization": f"Bearer {access_token}", "accept": "application/json"},
+                proxy=proxy, timeout=15, impersonate="chrome120",
+            )
+
+            if check_resp.status_code != 200:
+                err_detail = ""
+                try:
+                    err_detail = str(check_resp.json().get("detail", ""))[:80]
+                except Exception:
+                    err_detail = check_resp.text[:80]
+                log(f"  ✗ {acc.email}: 已封禁 ({check_resp.status_code}: {err_detail})")
+                results["dead"] += 1
+                with Session(engine) as sess:
+                    model = sess.get(AccountModel, acc.id)
+                    if model:
+                        patch_account_graph(
+                            sess, model,
+                            lifecycle_status=AccountStatus.INVALID.value,
+                            summary_updates={"deactivated_at": _utcnow_iso(), "deactivated_reason": err_detail},
+                        )
+                        sess.add(model)
+                        sess.commit()
+                continue
+
+            # 3. 上传到 CPA
+            if cpa_api_url and cpa_api_key:
+                from datetime import timedelta
+                tz8 = timezone(timedelta(hours=8))
+                jwt_payload = _decode_jwt(access_token)
+                auth_info = jwt_payload.get("https://api.openai.com/auth", {})
+                account_id = auth_info.get("chatgpt_account_id", "")
+                exp = jwt_payload.get("exp", 0)
+                iat = jwt_payload.get("iat", 0)
+                expired_str = datetime.fromtimestamp(exp, tz=tz8).strftime("%Y-%m-%dT%H:%M:%S+08:00") if exp else ""
+                last_refresh = datetime.fromtimestamp(iat, tz=tz8).strftime("%Y-%m-%dT%H:%M:%S+08:00") if iat else _utcnow_iso()
+
+                token_data = {
+                    "access_token": access_token,
+                    "account_id": account_id,
+                    "disabled": False,
+                    "email": acc.email,
+                    "expired": expired_str,
+                    "id_token": access_token,
+                    "last_refresh": last_refresh,
+                    "refresh_token": credentials.get("refresh_token", ""),
+                    "type": "codex",
+                }
+
+                from urllib.parse import quote
+                upload_url = f"{cpa_api_url.rstrip('/')}/v0/management/auth-files?name={quote(acc.email + '.json')}"
+                upload_resp = cffi_requests.post(
+                    upload_url,
+                    headers={"Authorization": f"Bearer {cpa_api_key}", "Content-Type": "application/json"},
+                    data=json.dumps(token_data, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                    verify=False, timeout=30, impersonate="chrome110",
+                )
+                if upload_resp.status_code in (200, 201, 207):
+                    results["uploaded"] += 1
+                    log(f"  ✓ {acc.email}: 刷新+上传成功")
+                else:
+                    log(f"  ✗ {acc.email}: 上传失败 HTTP {upload_resp.status_code}")
+            else:
+                log(f"  ✓ {acc.email}: 刷新成功 (CPA 未配置)")
+
+            time.sleep(0.5)
+
+        except Exception as exc:
+            results["error"] += 1
+            log(f"  ✗ {acc.email}: 异常 {exc}")
+
+    log(f"[CPA Sync] 刷新 {results['refreshed']}, 上传 {results['uploaded']}, "
+        f"封禁 {results['dead']}, 跳过 {results['skipped']}, 错误 {results['error']}")
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Lifecycle manager (combines all periodic tasks)
 # ---------------------------------------------------------------------------
 
@@ -272,15 +463,18 @@ class LifecycleManager:
         *,
         check_interval_hours: float = 6,
         refresh_interval_hours: float = 12,
+        cpa_sync_interval_hours: float = 6,
         warning_hours: int = 48,
     ):
         self.check_interval = check_interval_hours * 3600
         self.refresh_interval = refresh_interval_hours * 3600
+        self.cpa_sync_interval = cpa_sync_interval_hours * 3600
         self.warning_hours = warning_hours
         self._running = False
         self._thread: threading.Thread | None = None
         self._last_check = 0.0
         self._last_refresh = 0.0
+        self._last_cpa_sync = 0.0
 
     def start(self):
         if self._running:
@@ -313,6 +507,12 @@ class LifecycleManager:
                     print("[LifecycleManager] 开始 token 自动续期...")
                     refresh_expiring_tokens()
                     self._last_refresh = now
+
+                # CPA sync (刷新 token + 存活检查 + 上传)
+                if now - self._last_cpa_sync >= self.cpa_sync_interval:
+                    print("[LifecycleManager] 开始 CPA 同步 (刷新+检查+上传)...")
+                    refresh_and_sync_cpa()
+                    self._last_cpa_sync = now
 
             except Exception as exc:
                 print(f"[LifecycleManager] 错误: {exc}")

@@ -14,10 +14,10 @@ def _result_text(result, key: str) -> str:
 
 
 def _assert_complete_oauth_callback(result) -> None:
-    missing = [
-        key for key in ("account_id", "access_token", "refresh_token", "id_token")
-        if not _result_text(result, key)
-    ]
+    # NextAuth 流程只返回 account_id + access_token (+ session_token)
+    # 传统 Codex CLI 流程返回全部 4 个字段
+    required = ("account_id", "access_token")
+    missing = [key for key in required if not _result_text(result, key)]
     if missing:
         raise RuntimeError(
             "ChatGPT 注册未完成完整 OAuth callback，缺少: " + ", ".join(missing)
