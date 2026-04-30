@@ -437,8 +437,29 @@ def init_db():
     with Session(engine) as session:
         ProviderDefinitionsRepository().ensure_seeded()
         _cleanup_non_real_providers()
+        _cleanup_empty_provider_settings()
         sync_all_account_graphs(session)
         session.commit()
+
+
+def _cleanup_empty_provider_settings():
+    """清理 v1.0.7/v1.0.8 中 PR #42 自动创建的空 ProviderSetting。
+
+    判定条件：config / auth / metadata 三个字段都为空 dict 时认为
+    用户从未编辑过，可以安全删除。被删后用户能从前端"新增"按钮
+    重新选择对应的 provider。"""
+    with Session(engine) as session:
+        items = session.exec(select(ProviderSettingModel)).all()
+        removed = 0
+        for item in items:
+            config = item.get_config() or {}
+            auth = item.get_auth() or {}
+            metadata = item.get_metadata() or {}
+            if not config and not auth and not metadata:
+                session.delete(item)
+                removed += 1
+        if removed:
+            session.commit()
 
 
 def _cleanup_non_real_providers():
