@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { apiFetch } from '@/lib/utils'
 import type { ProviderOption, ProviderSetting } from '@/lib/config-options'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Save, Eye, EyeOff, X, Pencil, Plus, Trash2, FlaskConical } from 'lucide-react'
+import { Save, Eye, EyeOff, X, Pencil, Plus, Trash2, FlaskConical, Search } from 'lucide-react'
 import { invalidateConfigOptionsCache } from '@/lib/app-data'
 
 const CATEGORY_GROUPS = [
@@ -34,6 +34,89 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
 }
 
 /* ------------------------------------------------------------------ */
+/*  Searchable Select                                                  */
+/* ------------------------------------------------------------------ */
+function SearchableSelect({ value, options, placeholder, onChange }: {
+  value: string
+  options: Array<{ value: string; label: string }>
+  placeholder?: string
+  onChange: (v: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const filtered = search
+    ? options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()) || o.value.includes(search))
+    : options
+
+  const selectedLabel = options.find(o => o.value === value)?.label || ''
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  useEffect(() => {
+    if (open && inputRef.current) inputRef.current.focus()
+  }, [open])
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => { setOpen(!open); setSearch('') }}
+        className="control-surface w-full text-left flex items-center justify-between"
+      >
+        <span className={selectedLabel ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}>
+          {selectedLabel || placeholder || '请选择...'}
+        </span>
+        <svg className="h-4 w-4 text-[var(--text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={open ? 'M5 15l7-7 7 7' : 'M19 9l-7 7-7-7'} />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-pane)] shadow-lg">
+          <div className="p-2 border-b border-[var(--border)]">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--text-muted)]" />
+              <input
+                ref={inputRef}
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="搜索..."
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] pl-8 pr-3 py-1.5 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+              />
+            </div>
+          </div>
+          <div className="max-h-48 overflow-y-auto py-1">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-[var(--text-muted)]">无匹配结果</div>
+            ) : filtered.map(o => (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => { onChange(o.value); setOpen(false); setSearch('') }}
+                className={`w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--chip-bg)] ${
+                  o.value === value ? 'bg-[var(--accent)]/10 text-[var(--accent)] font-medium' : 'text-[var(--text-primary)]'
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  Edit modal                                                         */
 /* ------------------------------------------------------------------ */
 function EditModal({
@@ -55,6 +138,40 @@ function EditModal({
   const [saved, setSaved] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message?: string; error?: string } | null>(null)
+  const [asyncOptions, setAsyncOptions] = useState<Record<string, Array<{ value: string; label: string }>>>({})
+  const [asyncLoading, setAsyncLoading] = useState<Record<string, boolean>>({})
+
+  // 加载 async-select 字段的选项
+  useEffect(() => {
+    for (const field of fields) {
+      if (field.type === 'async-select' && field.asyncUrl && !asyncOptions[field.key]) {
+        setAsyncLoading(prev => ({ ...prev, [field.key]: true }))
+        apiFetch(field.asyncUrl)
+          .then((data: any) => {
+            const valueKey = field.asyncValueKey || 'value'
+            const labelKey = field.asyncLabelKey || 'label'
+            // 支持多种响应格式
+            let items: any[] = []
+            if (Array.isArray(data)) items = data
+            else if (data?.countries) items = data.countries
+            else if (data?.services) items = data.services
+            else if (data?.data) items = Array.isArray(data.data) ? data.data : []
+
+            const options = items.map((item: any) => {
+              if (typeof item === 'object') {
+                const v = String(item[valueKey] ?? item.id ?? item.country ?? '')
+                const l = String(item[labelKey] ?? item.name ?? item.title ?? item.eng ?? v)
+                return { value: v, label: l ? `${l} (${v})` : v }
+              }
+              return { value: String(item), label: String(item) }
+            }).filter(o => o.value)
+            setAsyncOptions(prev => ({ ...prev, [field.key]: options }))
+          })
+          .catch(() => setAsyncOptions(prev => ({ ...prev, [field.key]: [] })))
+          .finally(() => setAsyncLoading(prev => ({ ...prev, [field.key]: false })))
+      }
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = async () => {
     const config: Record<string, string> = {}
@@ -135,8 +252,30 @@ function EditModal({
             return (
               <div key={field.key}>
                 <label className="mb-1.5 block text-sm font-medium text-[var(--text-secondary)]">{field.label}</label>
+                {field.hint && <p className="mb-1.5 text-xs text-[var(--text-muted)]">{field.hint}</p>}
                 <div className="relative">
-                  {field.type === 'select' && field.options?.length ? (
+                  {field.type === 'toggle' ? (
+                    <div className="flex items-center gap-3">
+                      <Toggle
+                        checked={['true', '1', 'yes', 'on'].includes((form[field.key] || '').toLowerCase())}
+                        onChange={v => setForm(f => ({ ...f, [field.key]: v ? 'true' : 'false' }))}
+                      />
+                      <span className="text-sm text-[var(--text-muted)]">
+                        {['true', '1', 'yes', 'on'].includes((form[field.key] || '').toLowerCase()) ? '已启用' : '未启用'}
+                      </span>
+                    </div>
+                  ) : field.type === 'async-select' ? (
+                    asyncLoading[field.key] ? (
+                      <div className="control-surface text-[var(--text-muted)] text-sm py-2">加载中...</div>
+                    ) : (
+                      <SearchableSelect
+                        value={form[field.key] || ''}
+                        options={asyncOptions[field.key] || []}
+                        placeholder={field.placeholder}
+                        onChange={v => setForm(f => ({ ...f, [field.key]: v }))}
+                      />
+                    )
+                  ) : field.type === 'select' && field.options?.length ? (
                     <select value={form[field.key] || ''} onChange={e => setForm(f => ({ ...f, [field.key]: e.target.value }))} className="control-surface appearance-none">
                       {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>

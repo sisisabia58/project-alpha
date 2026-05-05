@@ -92,7 +92,427 @@ PASSWORDLESS_LOGIN_SELECTORS = [
     'button:has-text("一次性验证码")',
     'button:has-text("驗證碼")',
     'button:has-text("验证码")',
+    'button:has-text("código único")',
+    'button:has-text("code unique")',
+    'button:has-text("Einmalcode")',
+    'button:has-text("código de uso único")',
 ]
+
+# add-phone 页面国际拨号码 -> 国家名映射（用于 UI 下拉选择）
+PHONE_COUNTRY_CODE_MAP = {
+    "1": "United States", "7": "Russia", "20": "Egypt", "27": "South Africa",
+    "30": "Greece", "31": "Netherlands", "32": "Belgium", "33": "France",
+    "34": "Spain", "36": "Hungary", "39": "Italy", "40": "Romania",
+    "44": "United Kingdom", "45": "Denmark", "46": "Sweden", "47": "Norway",
+    "48": "Poland", "49": "Germany", "51": "Peru", "52": "Mexico",
+    "53": "Cuba", "54": "Argentina", "55": "Brazil", "56": "Chile",
+    "57": "Colombia", "58": "Venezuela", "60": "Malaysia", "61": "Australia",
+    "62": "Indonesia", "63": "Philippines", "64": "New Zealand",
+    "65": "Singapore", "66": "Thailand", "81": "Japan", "82": "South Korea",
+    "84": "Vietnam", "86": "China", "90": "Turkey", "91": "India",
+    "92": "Pakistan", "93": "Afghanistan", "94": "Sri Lanka", "95": "Myanmar",
+    "98": "Iran", "212": "Morocco", "213": "Algeria", "216": "Tunisia",
+    "218": "Libya", "220": "Gambia", "221": "Senegal", "234": "Nigeria",
+    "254": "Kenya", "255": "Tanzania", "256": "Uganda", "260": "Zambia",
+    "263": "Zimbabwe", "351": "Portugal", "353": "Ireland", "354": "Iceland",
+    "358": "Finland", "370": "Lithuania", "371": "Latvia", "372": "Estonia",
+    "374": "Armenia", "375": "Belarus", "380": "Ukraine", "381": "Serbia",
+    "385": "Croatia", "420": "Czech Republic", "421": "Slovakia",
+    "855": "Cambodia", "856": "Laos", "880": "Bangladesh", "886": "Taiwan",
+    "960": "Maldives", "966": "Saudi Arabia", "971": "United Arab Emirates",
+    "972": "Israel", "977": "Nepal", "992": "Tajikistan",
+    "993": "Turkmenistan", "994": "Azerbaijan", "995": "Georgia",
+    "996": "Kyrgyzstan", "998": "Uzbekistan",
+}
+
+# 拨号码 -> ISO 3166-1 alpha-2 国家代码（用于 React Aria <select> 的 value 匹配）
+PHONE_DIAL_TO_ISO = {
+    "1": "US", "7": "RU", "20": "EG", "27": "ZA",
+    "30": "GR", "31": "NL", "32": "BE", "33": "FR",
+    "34": "ES", "36": "HU", "39": "IT", "40": "RO",
+    "44": "GB", "45": "DK", "46": "SE", "47": "NO",
+    "48": "PL", "49": "DE", "51": "PE", "52": "MX",
+    "53": "CU", "54": "AR", "55": "BR", "56": "CL",
+    "57": "CO", "58": "VE", "60": "MY", "61": "AU",
+    "62": "ID", "63": "PH", "64": "NZ",
+    "65": "SG", "66": "TH", "81": "JP", "82": "KR",
+    "84": "VN", "86": "CN", "90": "TR", "91": "IN",
+    "92": "PK", "93": "AF", "94": "LK", "95": "MM",
+    "98": "IR", "212": "MA", "213": "DZ", "216": "TN",
+    "218": "LY", "220": "GM", "221": "SN", "234": "NG",
+    "254": "KE", "255": "TZ", "256": "UG", "260": "ZM",
+    "263": "ZW", "351": "PT", "353": "IE", "354": "IS",
+    "358": "FI", "370": "LT", "371": "LV", "372": "EE",
+    "374": "AM", "375": "BY", "380": "UA", "381": "RS",
+    "385": "HR", "420": "CZ", "421": "SK",
+    "855": "KH", "856": "LA", "880": "BD", "886": "TW",
+    "960": "MV", "966": "SA", "971": "AE",
+    "972": "IL", "977": "NP", "992": "TJ",
+    "993": "TM", "994": "AZ", "995": "GE",
+    "996": "KG", "998": "UZ",
+}
+
+PHONE_INPUT_SELECTORS = [
+    'input[type="tel"]',
+    'input[name="phone"]',
+    'input[name="phone_number"]',
+    'input[name="phoneNumber"]',
+    'input[id*="phone" i]',
+    'input[placeholder*="phone" i]',
+    'input[autocomplete="tel"]',
+    'input[autocomplete="tel-national"]',
+]
+
+PHONE_SEND_SELECTORS = [
+    'button:has-text("Send code via SMS")',
+    'button:has-text("Send code")',
+    'button:has-text("Send via SMS")',
+    'button:has-text("Send link via SMS")',
+    'button:has-text("Send")',
+    'button[type="submit"]',
+    'button:has-text("Continue")',
+    'button:has-text("continue")',
+    'button:has-text("发送")',
+]
+
+PHONE_VERIFY_SELECTORS = [
+    'button:has-text("Verify")',
+    'button:has-text("verify")',
+    'button:has-text("Check")',
+    'button[type="submit"]',
+    'button:has-text("Continue")',
+    'button:has-text("continue")',
+    'button:has-text("验证")',
+    'button:has-text("确认")',
+]
+
+
+def _parse_phone_country_and_local(phone_number: str) -> tuple[str, str, str]:
+    """从完整手机号解析出 (拨号码, 本地号码, 国家名)。
+
+    例: +66959075673 -> ("66", "959075673", "Thailand")
+    """
+    num = str(phone_number or "").lstrip("+").strip()
+    for length in (3, 2, 1):
+        if length > len(num):
+            continue
+        prefix = num[:length]
+        if prefix in PHONE_COUNTRY_CODE_MAP:
+            return prefix, num[length:], PHONE_COUNTRY_CODE_MAP[prefix]
+    return "", num, ""
+
+
+def _select_phone_country_ui(page, dial_code: str, country_name: str, log) -> bool:
+    """在 add-phone 页面的国家下拉框中选择对应国家。
+
+    OpenAI add-phone 页面使用 React Aria Select 组件，底层有一个隐藏的原生 <select>
+    和一个可视的 button trigger + listbox 弹出层。
+    """
+    if not dial_code and not country_name:
+        log("  无法识别国家码，跳过国家选择")
+        return False
+
+    iso_code = PHONE_DIAL_TO_ISO.get(dial_code, "")
+    log(f"  目标国家: {country_name} (+{dial_code}) ISO={iso_code}")
+
+    # 先检查当前下拉框是否已经是目标国家
+    dial_pattern = f"(+{dial_code})"
+    already = page.evaluate(
+        """
+        (dialPattern) => {
+          const visible = (el) => {
+            if (!el) return false;
+            const s = window.getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            return s && s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0;
+          };
+          const all = Array.from(document.querySelectorAll('button, div, span, a, [role="button"], [role="combobox"], select'));
+          for (const el of all) {
+            if (!visible(el)) continue;
+            const text = (el.innerText || el.textContent || '').trim();
+            if (text.includes(dialPattern) && text.length < 80) return true;
+          }
+          return false;
+        }
+        """,
+        dial_pattern,
+    )
+    if already:
+        log(f"  国家已是目标值: (+{dial_code})")
+        return True
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 策略 1: 通过底层原生 <select> 直接设置值（最可靠）
+    # React Aria Select 底层会有一个隐藏的 <select> 用于表单提交和无障碍。
+    # 直接修改它的值并触发 change 事件可以同步 React 状态。
+    # ═══════════════════════════════════════════════════════════════════
+    native_selected = page.evaluate(
+        """
+        ({ isoCode, dialCode, countryName }) => {
+          const selects = document.querySelectorAll('select');
+          for (const sel of selects) {
+            if (sel.options.length < 10) continue;  // 排除非国家的 select
+
+            // 尝试多种匹配策略找到目标 option
+            let targetValue = null;
+            for (const opt of sel.options) {
+              const v = (opt.value || '').trim();
+              const t = (opt.text || opt.label || '').trim();
+              // 匹配 ISO 代码 (如 "TH")
+              if (isoCode && v === isoCode) { targetValue = v; break; }
+              // 匹配拨号码 (如 value 包含 "66" 或 text 包含 "+66")
+              if (t.includes('(+' + dialCode + ')')) { targetValue = v; break; }
+              if (t.includes(countryName)) { targetValue = v; break; }
+            }
+
+            if (targetValue !== null) {
+              // 使用 React 兼容的方式设置值
+              const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLSelectElement.prototype, 'value'
+              )?.set;
+              if (nativeInputValueSetter) {
+                nativeInputValueSetter.call(sel, targetValue);
+              } else {
+                sel.value = targetValue;
+              }
+              sel.dispatchEvent(new Event('change', { bubbles: true }));
+              sel.dispatchEvent(new Event('input', { bubbles: true }));
+              return { ok: true, value: targetValue, method: 'native_setter' };
+            }
+          }
+          return { ok: false };
+        }
+        """,
+        {"isoCode": iso_code, "dialCode": dial_code, "countryName": country_name},
+    )
+    if native_selected and native_selected.get("ok"):
+        log(f"  ✓ 通过原生 <select> 选择成功: value={native_selected.get('value')}")
+        time.sleep(0.5)
+        # 验证 UI 是否同步更新
+        verify = page.evaluate(
+            "(dp) => { const b = document.querySelector('button[aria-haspopup=\"listbox\"]'); return b ? (b.innerText || '').trim() : ''; }",
+            dial_pattern,
+        )
+        if f"+{dial_code}" in (verify or ""):
+            log(f"  ✓ UI 已同步: {verify}")
+            return True
+        log(f"  原生 select 已设置但 UI 未同步 ({verify})，尝试 UI 交互...")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 策略 2: 通过 React Aria 的 key 属性直接操作
+    # ═══════════════════════════════════════════════════════════════════
+    key_selected = page.evaluate(
+        """
+        ({ isoCode, dialCode, countryName }) => {
+          // 找到 React Aria Select 的隐藏 <select> 并通过 selectOption 模拟
+          const selects = document.querySelectorAll('select');
+          for (const sel of selects) {
+            if (sel.options.length < 10) continue;
+            for (const opt of sel.options) {
+              const v = (opt.value || '').trim();
+              const t = (opt.text || opt.label || '').trim();
+              if ((isoCode && v === isoCode) || t.includes('(+' + dialCode + ')') || t.includes(countryName)) {
+                sel.value = v;
+                // 触发 React 合成事件
+                const ev = new Event('change', { bubbles: true });
+                Object.defineProperty(ev, 'target', { writable: false, value: sel });
+                sel.dispatchEvent(ev);
+                return { ok: true, value: v, text: t };
+              }
+            }
+          }
+          return { ok: false };
+        }
+        """,
+        {"isoCode": iso_code, "dialCode": dial_code, "countryName": country_name},
+    )
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 策略 3: 使用 Playwright 的 selectOption API（对原生 select 最可靠）
+    # ═══════════════════════════════════════════════════════════════════
+    try:
+        select_el = page.query_selector("select")
+        if select_el:
+            # 尝试用 ISO 代码选择
+            if iso_code:
+                try:
+                    select_el.select_option(value=iso_code)
+                    log(f"  ✓ Playwright selectOption(value={iso_code}) 成功")
+                    time.sleep(0.5)
+                    return True
+                except Exception:
+                    pass
+            # 尝试用 label 匹配（包含国家名或拨号码）
+            try:
+                # 获取所有 option 的 value 和 text，找到匹配的
+                match_value = page.evaluate(
+                    """
+                    ({ dialCode, countryName }) => {
+                      const sel = document.querySelector('select');
+                      if (!sel) return '';
+                      for (const opt of sel.options) {
+                        const t = (opt.text || opt.label || '').trim();
+                        const v = (opt.value || '').trim();
+                        if (t.includes('(+' + dialCode + ')') || t.includes(countryName)) return v;
+                      }
+                      return '';
+                    }
+                    """,
+                    {"dialCode": dial_code, "countryName": country_name},
+                )
+                if match_value:
+                    select_el.select_option(value=match_value)
+                    log(f"  ✓ Playwright selectOption(value={match_value}) 成功")
+                    time.sleep(0.5)
+                    return True
+            except Exception as e:
+                log(f"  selectOption label 匹配失败: {e}")
+    except Exception as e:
+        log(f"  Playwright selectOption 策略失败: {e}")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 策略 4: 点击 trigger 按钮打开 listbox，然后在 listbox 中选择
+    # ═══════════════════════════════════════════════════════════════════
+    trigger = None
+    for sel in [
+        'button[aria-haspopup="listbox"]',
+        '.react-aria-Select button',
+        'button[class*="select" i]',
+        'button[class*="country" i]',
+    ]:
+        trigger = page.query_selector(sel)
+        if trigger:
+            break
+
+    if not trigger:
+        trigger = page.evaluate(
+            r"""
+            () => {
+              const pattern = /\(\+\d{1,4}\)/;
+              const all = document.querySelectorAll('button, [role="button"], [role="combobox"]');
+              for (const el of all) {
+                const r = el.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                const text = (el.innerText || '').trim();
+                if (pattern.test(text)) {
+                  el.scrollIntoView({ block: 'center' });
+                  el.click();
+                  return true;
+                }
+              }
+              return false;
+            }
+            """,
+        )
+        if not trigger:
+            log("  ⚠️ 未找到国家选择器触发按钮")
+            return False
+        log("  已通过 JS 点击触发按钮")
+    else:
+        trigger.scroll_into_view_if_needed()
+        trigger.click()
+        log("  已点击国家选择器下拉框")
+
+    time.sleep(0.8)
+
+    # 等待 listbox 出现
+    listbox = None
+    for _ in range(10):
+        listbox = page.query_selector('[role="listbox"]')
+        if listbox:
+            break
+        time.sleep(0.3)
+
+    if not listbox:
+        log("  ⚠️ 下拉框 listbox 未出现")
+        return False
+
+    log("  listbox 已出现")
+
+    # 在 listbox 中查找并点击目标 option
+    option = None
+    if iso_code:
+        for attr in ["data-key", "data-value", "value", "id"]:
+            # 尝试精确匹配和包含匹配
+            option = page.query_selector(f'[role="option"][{attr}="{iso_code}"]')
+            if not option:
+                option = page.query_selector(f'[role="option"][{attr}*="{iso_code}"]')
+            if option:
+                log(f"  找到 option: [{attr} 含 {iso_code}]")
+                break
+
+    if not option:
+        option_idx = page.evaluate(
+            """
+            ({ countryName, dialCode }) => {
+              const options = document.querySelectorAll('[role="option"]');
+              for (let i = 0; i < options.length; i++) {
+                const text = (options[i].innerText || options[i].textContent || '').trim();
+                if (text.includes(countryName) || text.includes('(+' + dialCode + ')') || text.includes('+' + dialCode)) {
+                  return i;
+                }
+              }
+              // 宽松匹配：只匹配拨号码数字
+              for (let i = 0; i < options.length; i++) {
+                const text = (options[i].innerText || options[i].textContent || '').trim();
+                if (text.includes(dialCode)) {
+                  return i;
+                }
+              }
+              return -1;
+            }
+            """,
+            {"countryName": country_name, "dialCode": dial_code},
+        )
+        if option_idx >= 0:
+            options = page.query_selector_all('[role="option"]')
+            if option_idx < len(options):
+                option = options[option_idx]
+                log(f"  找到 option: 文本匹配 index={option_idx}")
+
+    if option:
+        option.scroll_into_view_if_needed()
+        option.click()
+        time.sleep(0.5)
+        new_text = page.evaluate(
+            """() => {
+              const btn = document.querySelector('button[aria-haspopup="listbox"]') ||
+                          document.querySelector('.react-aria-Select button');
+              return btn ? (btn.innerText || '').trim() : '';
+            }""",
+        )
+        log(f"  选择后下拉框显示: {new_text}")
+        if f"+{dial_code}" in (new_text or ""):
+            log(f"  ✓ 国家选择成功: {new_text}")
+            return True
+
+    # 键盘 type-ahead 搜索
+    log(f"  尝试键盘 type-ahead: {country_name}")
+    page.keyboard.type(country_name, delay=80)
+    time.sleep(0.8)
+
+    # 按 Enter 确认选择
+    page.keyboard.press("Enter")
+    time.sleep(0.5)
+
+    # 验证
+    final_text = page.evaluate(
+        """() => {
+          const btn = document.querySelector('button[aria-haspopup="listbox"]') ||
+                      document.querySelector('.react-aria-Select button');
+          return btn ? (btn.innerText || '').trim() : '';
+        }""",
+    )
+    if f"+{dial_code}" in (final_text or ""):
+        log(f"  ✓ type-ahead 选择成功: {final_text}")
+        return True
+
+    log(f"  ⚠️ 下拉框已展开但未找到匹配国家: {country_name} (+{dial_code})")
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    return False
 
 
 def _build_proxy_config(proxy: Optional[str]) -> Optional[dict]:
@@ -458,20 +878,20 @@ def _pick_best_about_you_input(entries: list[dict], field: str, exclude_visible_
 
         score = 0
         if field == "name":
-            if any(token in hints for token in ("full name", "fullname", "全名", "姓名")):
+            if any(token in hints for token in ("full name", "fullname", "全名", "姓名", "nombre completo", "nom complet", "vollständiger name", "nome completo")):
                 score += 10
-            if any(token in hints for token in (" name ", "name", "autocomplete=name")):
+            if any(token in hints for token in (" name ", "name", "autocomplete=name", "nombre", "nom", "nome")):
                 score += 3
-            if any(token in hints for token in ("age", "年龄", "birthday", "birth", "date of birth", "出生", "生日")):
+            if any(token in hints for token in ("age", "年龄", "edad", "âge", "alter", "idade", "birthday", "birth", "date of birth", "出生", "生日")):
                 score -= 8
         elif field == "age":
-            if any(token in hints for token in ("age", "年龄", "how old")):
+            if any(token in hints for token in ("age", "年龄", "how old", "edad", "âge", "alter", "idade", "나이")):
                 score += 10
-            if any(token in hints for token in ("full name", "fullname", "全名", "姓名")):
+            if any(token in hints for token in ("full name", "fullname", "全名", "姓名", "nombre completo", "nom complet")):
                 score -= 10
-            if "name" in hints and "age" not in hints and "年龄" not in hints:
+            if "name" in hints and "age" not in hints and "年龄" not in hints and "edad" not in hints:
                 score -= 6
-            if any(token in hints for token in ("birthday", "birth", "date of birth", "出生", "生日")):
+            if any(token in hints for token in ("birthday", "birth", "date of birth", "出生", "生日", "fecha de nacimiento", "nascimento")):
                 score -= 3
         else:
             continue
@@ -1201,6 +1621,8 @@ def _submit_callback_result(callback_url: str, oauth_start, proxy: str | None) -
         callback_url=callback_url,
         expected_state=oauth_start.state,
         code_verifier=oauth_start.code_verifier,
+        redirect_uri=oauth_start.redirect_uri,
+        client_id=oauth_start.client_id,
         proxy_url=proxy,
     )
     return json.loads(result_json)
@@ -1631,13 +2053,68 @@ def _handle_add_phone_challenge(
     user_agent: str,
     log,
     resume_url: str = "",
+    max_phone_attempts: int = 3,
 ) -> dict:
+    """在 add-phone 页面通过 UI 交互完成手机号验证。
+
+    流程: 选择国家 -> 输入本地号码 -> 点击发送 -> 填写 OTP -> 点击验证。
+    如果验证码超时未收到，自动换号重试（最多 max_phone_attempts 次）。
+    """
     if not phone_callback:
         raise RuntimeError(
             "ChatGPT 注册遇到手机号验证，但未配置 phone_callback。"
             "请在 RegisterConfig.extra 中配置接码服务，或手动完成手机验证。"
         )
 
+    last_error = None
+    for phone_attempt in range(max_phone_attempts):
+        if phone_attempt > 0:
+            log(f"换号重试第 {phone_attempt + 1}/{max_phone_attempts} 次...")
+            # 回到 add-phone 页面
+            try:
+                page.goto(f"{OPENAI_AUTH}/add-phone", wait_until="domcontentloaded", timeout=15000)
+                time.sleep(1)
+            except Exception:
+                pass
+
+        try:
+            result = _do_add_phone_attempt(
+                page, phone_callback,
+                device_id=device_id, user_agent=user_agent,
+                log=log, resume_url=resume_url,
+            )
+            return result
+        except RuntimeError as exc:
+            last_error = exc
+            error_msg = str(exc)
+            # 只有"未获取到短信验证码"才换号重试，其他错误直接抛出
+            if "未获取到短信验证码" not in error_msg:
+                raise
+            log(f"⚠️ 验证码超时未收到，准备换号重试...")
+            # 取消当前号码
+            if hasattr(phone_callback, "cleanup"):
+                phone_callback.cleanup()
+            # 重置 phone_callback 状态为 need_number
+            if hasattr(phone_callback, "phase"):
+                phone_callback.phase = "need_number"
+                phone_callback.activation = None
+                phone_callback.completed = False
+
+    raise last_error or RuntimeError("短信验证失败: 多次换号均未收到验证码")
+
+
+def _do_add_phone_attempt(
+    page,
+    phone_callback,
+    *,
+    device_id: str,
+    user_agent: str,
+    log,
+    resume_url: str = "",
+) -> dict:
+    """单次手机号验证尝试（内部函数）。"""
+
+    # 保留 HTTP resend 回调供 SMS provider 内部使用
     referer = _normalize_url(str(page.url or ""), OPENAI_AUTH) or f"{OPENAI_AUTH}/add-phone"
     headers = _build_browser_headers(
         user_agent=user_agent,
@@ -1653,94 +2130,180 @@ def _handle_add_phone_challenge(
     )
 
     def _request_openai_resend():
-        result = _browser_fetch(
-            page,
-            f"{OPENAI_AUTH}/api/accounts/phone-otp/resend",
-            method="POST",
-            headers=headers,
-            body=None,
-            redirect="follow",
-        )
-        log(f"  phone-otp/resend -> {int(result.get('status') or 0)}")
+        # 浏览器模式下只通过页面 UI 点击 Resend 按钮
+        resend_clicked = _click_first(page, [
+            'button:has-text("Resend")',
+            'button:has-text("resend")',
+            'button:has-text("Resend code")',
+            'button:has-text("重新发送")',
+            'a:has-text("Resend")',
+            'a:has-text("resend")',
+            'a:has-text("Resend code")',
+        ], timeout=3)
+        if resend_clicked:
+            log(f"  phone-otp/resend -> 已点击页面 Resend 按钮: {resend_clicked}")
+        else:
+            log("  phone-otp/resend -> 页面未找到 Resend 按钮，跳过（浏览器模式不走 HTTP）")
 
     if hasattr(phone_callback, "set_resend_callback"):
         phone_callback.set_resend_callback(_request_openai_resend)
 
+    # ---- 第1步: 获取手机号 ----
     log("注册流程已进入 add_phone，开始准备租号并接收短信验证码...")
     phone_number = str(phone_callback() or "").strip()
     if not phone_number:
         raise RuntimeError("未获取到手机号")
-    log(f"检测到 add_phone，提交手机号: {_mask_phone_number(phone_number)}")
+    log(f"检测到 add_phone，提交手机号(UI): {_mask_phone_number(phone_number)}")
+
+    # 解析国家拨号码和本地号码
+    dial_code, local_number, country_name = _parse_phone_country_and_local(phone_number)
+    log(f"  解析号码: 国家={country_name or '未知'} 拨号码=+{dial_code} 本地号={local_number[:4]}...")
+
+    # 确保在 add-phone 页面
+    current_url = str(page.url or "")
+    if "add-phone" not in current_url:
+        page.goto(f"{OPENAI_AUTH}/add-phone", wait_until="domcontentloaded", timeout=30000)
+    time.sleep(1)
+
+    # ---- 第2步: 选择国家 ----
+    country_selected = _select_phone_country_ui(page, dial_code, country_name, log)
     _browser_pause(page)
-    send_result = _browser_fetch(
-        page,
-        f"{OPENAI_AUTH}/api/accounts/add-phone/send",
-        method="POST",
-        headers=headers,
-        body=json.dumps({"phone_number": phone_number}),
-        redirect="follow",
-    )
-    send_status = int(send_result.get("status") or 0)
-    log(f"  add-phone/send -> {send_status}")
-    if send_status not in (200, 201, 204):
-        detail = (send_result.get("text") or "").strip()
+
+    # ---- 第3步: 填写手机号 ----
+    phone_input_sel = _wait_for_any_selector(page, PHONE_INPUT_SELECTORS, timeout=10)
+    if phone_input_sel:
+        # 如果成功选了国家，输入本地号码；否则输入完整号码
+        fill_value = local_number if country_selected else phone_number
+        filled = _fill_input_like_user(page, phone_input_sel, fill_value)
+        if not filled:
+            # fallback: 尝试先清空再用 keyboard.type 输入
+            log(f"  _fill_input_like_user 失败，尝试 keyboard fallback...")
+            try:
+                page.click(phone_input_sel)
+                time.sleep(0.3)
+                page.keyboard.press("Meta+a")
+                time.sleep(0.1)
+                page.keyboard.press("Backspace")
+                time.sleep(0.2)
+                page.keyboard.type(fill_value, delay=random.randint(30, 70))
+                time.sleep(0.3)
+                # 验证输入值
+                actual = page.evaluate(
+                    "(sel) => { const el = document.querySelector(sel); return el ? el.value : ''; }",
+                    phone_input_sel,
+                )
+                if fill_value in str(actual or ""):
+                    filled = True
+                    log(f"  keyboard fallback 成功: {str(actual or '')[:8]}...")
+            except Exception as e:
+                log(f"  keyboard fallback 失败: {e}")
+        if not filled:
+            # 最终 fallback: 直接用 JS 设置值
+            try:
+                js_ok = page.evaluate(
+                    """
+                    ({ selector, value }) => {
+                      const input = document.querySelector(selector);
+                      if (!input) return false;
+                      input.focus();
+                      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                      if (setter) setter.call(input, value);
+                      else input.value = value;
+                      input.dispatchEvent(new Event('input', { bubbles: true }));
+                      input.dispatchEvent(new Event('change', { bubbles: true }));
+                      // 也触发 React 合成事件
+                      const nativeEvent = new Event('input', { bubbles: true });
+                      Object.defineProperty(nativeEvent, 'target', { writable: false, value: input });
+                      input.dispatchEvent(nativeEvent);
+                      return input.value === value;
+                    }
+                    """,
+                    {"selector": phone_input_sel, "value": fill_value},
+                )
+                if js_ok:
+                    filled = True
+                    log(f"  JS setValue fallback 成功")
+            except Exception as e:
+                log(f"  JS setValue fallback 失败: {e}")
+        if not filled:
+            raise RuntimeError(f"手机号输入框填写失败: {phone_input_sel}")
+        log(f"  手机号输入框已填写: {phone_input_sel} value={fill_value[:4]}...")
+    else:
+        raise RuntimeError("未找到手机号输入框")
+    _browser_pause(page)
+
+    # ---- 第4步: 点击发送按钮 ----
+    send_sel = _click_first(page, PHONE_SEND_SELECTORS, timeout=8)
+    if send_sel:
+        log(f"  已点击发送按钮: {send_sel}")
+    elif _submit_form_with_fallback(page, phone_input_sel):
+        log("  未找到发送按钮，已使用表单 fallback 提交")
+    else:
+        raise RuntimeError("未找到发送验证码按钮")
+
+    # 等待页面响应（可能显示 OTP 输入框或错误）
+    time.sleep(2)
+
+    # 检查发送是否成功（页面应出现 OTP 输入框或 URL 变化）
+    error_text = _extract_auth_error_text(page)
+    if error_text:
         if hasattr(phone_callback, "mark_send_failed"):
-            phone_callback.mark_send_failed(detail or f"HTTP {send_status}")
-        raise RuntimeError(f"手机号提交失败: {detail[:200] or f'HTTP {send_status}'}")
+            phone_callback.mark_send_failed(error_text)
+        raise RuntimeError(f"手机号提交失败: {error_text[:200]}")
+
     if hasattr(phone_callback, "mark_send_succeeded"):
         phone_callback.mark_send_succeeded()
+    log("手机号提交成功(UI)，开始等待短信验证码...")
 
-    log("手机号提交成功，开始等待短信验证码...")
-    validate_result = None
+    # ---- 第5步: 等待 SMS 验证码并在页面 OTP 输入框中填写 ----
     for code_attempt in range(3):
         sms_code = str(phone_callback() or "").strip()
         if not sms_code:
             raise RuntimeError("未获取到短信验证码")
 
-        for attempt in range(3):
-            _browser_pause(page)
-            validate_result = _browser_fetch(
-                page,
-                f"{OPENAI_AUTH}/api/accounts/phone-otp/validate",
-                method="POST",
-                headers=headers,
-                body=json.dumps({"code": sms_code}),
-                redirect="follow",
+        # 等待 OTP 输入框出现
+        otp_sel = _wait_for_any_selector(page, OTP_INPUT_SELECTORS, timeout=10)
+        if not otp_sel:
+            # 尝试用 phone input selectors 作为 OTP（某些版本页面复用同一 input）
+            otp_sel = _find_first_selector(page, PHONE_INPUT_SELECTORS)
+        if not otp_sel:
+            raise RuntimeError("未找到短信验证码输入框")
+
+        # 使用与邮箱 OTP 相同的填写逻辑
+        otp_resp = _submit_otp_via_page(page, sms_code, log)
+        otp_status = int(otp_resp.get("status") or 0)
+        log(f"  phone-otp 页面提交状态: {otp_status}")
+
+        if otp_resp.get("ok") or otp_status in (200, 201, 204):
+            if hasattr(phone_callback, "report_success"):
+                phone_callback.report_success()
+            # 等待页面跳转
+            time.sleep(1.5)
+            state = _extract_flow_state(
+                otp_resp.get("data"),
+                otp_resp.get("url", page.url),
             )
-            validate_status = int(validate_result.get("status") or 0)
-            log(f"  phone-otp/validate -> {validate_status}")
-            if validate_status in (200, 201, 204):
-                if hasattr(phone_callback, "report_success"):
-                    phone_callback.report_success()
-                break
-            if _is_invalid_phone_otp_response(validate_result):
-                log("短信验证码被判定无效，标记当前短信并继续等待下一条...")
-                if hasattr(phone_callback, "mark_code_failed"):
-                    phone_callback.mark_code_failed("invalid otp code")
-                validate_result = None
-                break
-            if validate_status >= 500 and attempt < 2:
-                time.sleep(2 * (attempt + 1))
-                continue
-            detail = (validate_result.get("text") or "").strip()
+            if not state.get("page_type"):
+                state = _derive_registration_state_from_page(page)
+            next_url = _normalize_url(resume_url, OPENAI_AUTH) if resume_url else ""
+            if next_url:
+                page.goto(next_url, wait_until="domcontentloaded", timeout=30000)
+                return _extract_flow_state(None, page.url)
+            return state
+
+        # 检查是否是无效验证码
+        page_error = _extract_auth_error_text(page)
+        if page_error and any(kw in page_error.lower() for kw in ("invalid", "incorrect", "wrong", "expired")):
+            log(f"短信验证码被判定无效: {page_error[:100]}，继续等待下一条...")
             if hasattr(phone_callback, "mark_code_failed"):
-                phone_callback.mark_code_failed(detail or f"HTTP {validate_status}")
-            raise RuntimeError(f"短信验证码校验失败: {detail[:200] or f'HTTP {validate_status}'}")
+                phone_callback.mark_code_failed(page_error or "invalid otp code")
+            continue
 
-        if validate_result is not None and int(validate_result.get("status") or 0) in (200, 201, 204):
-            break
-    else:
-        raise RuntimeError("短信验证码校验失败: 多次验证码均无效或未通过")
+        if hasattr(phone_callback, "mark_code_failed"):
+            phone_callback.mark_code_failed(page_error or f"status {otp_status}")
+        raise RuntimeError(f"短信验证码校验失败: {page_error[:200] if page_error else f'status {otp_status}'}")
 
-    state = _extract_flow_state(
-        (validate_result or {}).get("data"),
-        (validate_result or {}).get("url", page.url),
-    )
-    next_url = _normalize_url(resume_url, OPENAI_AUTH) if resume_url else ""
-    if next_url:
-        page.goto(next_url, wait_until="domcontentloaded", timeout=30000)
-        return _extract_flow_state(None, page.url)
-    return state
+    raise RuntimeError("短信验证码校验失败: 多次验证码均无效或未通过")
 
 
 def _requires_registration_navigation(state: dict) -> bool:
@@ -1910,7 +2473,7 @@ def _complete_oauth_in_browser(page, oauth_start, proxy, log) -> dict | None:
 
     CONSENT_FORM_SEL = OAUTH_CONSENT_FORM_SELECTOR
     MAX_ROUNDS = 4
-    CLICK_EFFECT_TIMEOUT = 12
+    CLICK_EFFECT_TIMEOUT = 30
 
     def _try_extract_callback(url: str) -> dict | None:
         if not url or "code=" not in url:
@@ -1920,8 +2483,53 @@ def _complete_oauth_in_browser(page, oauth_start, proxy, log) -> dict | None:
                 callback_url=url,
                 expected_state=oauth_start.state,
                 code_verifier=oauth_start.code_verifier,
+                redirect_uri=oauth_start.redirect_uri,
+                client_id=oauth_start.client_id,
                 proxy_url=proxy,
             ))
+        except ValueError as ve:
+            # state 缺失或不匹配时，如果 URL 确实是我们的 callback，跳过 state 验证直接换 token
+            if "state" in str(ve) and "localhost" in url and "code=" in url:
+                try:
+                    # 手动提取 code，跳过 state 验证
+                    from urllib.parse import urlparse, parse_qs
+                    parsed = urlparse(url)
+                    params = parse_qs(parsed.query)
+                    code = (params.get("code") or [""])[0]
+                    if code:
+                        from .oauth import _post_form, _jwt_claims_no_verify, OAUTH_TOKEN_URL
+                        import time as _time
+                        token_resp = _post_form(
+                            OAUTH_TOKEN_URL,
+                            {
+                                "grant_type": "authorization_code",
+                                "client_id": oauth_start.client_id,
+                                "code": code,
+                                "redirect_uri": oauth_start.redirect_uri,
+                                "code_verifier": oauth_start.code_verifier,
+                            },
+                            proxy_url=proxy,
+                        )
+                        access_token = (token_resp.get("access_token") or "").strip()
+                        refresh_token = (token_resp.get("refresh_token") or "").strip()
+                        id_token = (token_resp.get("id_token") or "").strip()
+                        if access_token:
+                            claims = _jwt_claims_no_verify(id_token)
+                            auth_claims = claims.get("https://api.openai.com/auth") or {}
+                            now = int(_time.time())
+                            expires_in = int(token_resp.get("expires_in") or 0)
+                            return {
+                                "id_token": id_token,
+                                "access_token": access_token,
+                                "refresh_token": refresh_token,
+                                "account_id": str(auth_claims.get("chatgpt_account_id") or ""),
+                                "email": str(claims.get("email") or ""),
+                                "expired": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now + max(expires_in, 0))),
+                                "last_refresh": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now)),
+                            }
+                except Exception:
+                    pass
+            return None
         except Exception:
             return None
 
@@ -1935,11 +2543,35 @@ def _complete_oauth_in_browser(page, oauth_start, proxy, log) -> dict | None:
 
     def _wait_for_callback(timeout_sec: int) -> dict | None:
         deadline = time.time() + timeout_sec
+        checked_urls = set()
         while time.time() < deadline:
+            try:
+                url = str(page.url or "")
+            except Exception:
+                url = ""
+            if url and url not in checked_urls:
+                checked_urls.add(url)
+                if "code=" in url or "localhost" in url:
+                    log(f"  [callback_wait] 检测到 URL 变化: {url[:150]}")
             result = _check_current_url()
             if result:
                 return result
+            # 也检查是否有导航到 localhost 的请求（即使页面加载失败）
+            if "localhost" in url and "code=" in url:
+                result = _try_extract_callback(url)
+                if result:
+                    return result
             time.sleep(0.8)
+        # 最后再检查一次
+        try:
+            final_url = str(page.url or "")
+            if "code=" in final_url:
+                log(f"  [callback_wait] 超时后最终 URL: {final_url[:150]}")
+                result = _try_extract_callback(final_url)
+                if result:
+                    return result
+        except Exception:
+            pass
         return None
 
     def _find_consent_button():
@@ -1954,7 +2586,7 @@ def _complete_oauth_in_browser(page, oauth_start, proxy, log) -> dict | None:
                 if (el.offsetParent === null) continue;
                 const text = (el.textContent || '').trim().toLowerCase();
                 const ddName = el.getAttribute('data-dd-action-name') || '';
-                if (ddName === 'Continue' || /continue|继续/i.test(text)) return 'form-continue';
+                if (ddName === 'Continue' || /continue|继续|continuar|fortfahren|continuer|続ける/i.test(text)) return 'form-continue';
             }
             const first = Array.from(buttons).find(el => el.offsetParent !== null);
             if (first) return 'form-submit';
@@ -1967,6 +2599,9 @@ def _complete_oauth_in_browser(page, oauth_start, proxy, log) -> dict | None:
             'button[type="submit"][data-dd-action-name="Continue"]',
             'button:has-text("Continue")',
             'button:has-text("继续")',
+            'button:has-text("Continuar")',
+            'button:has-text("Fortfahren")',
+            'button:has-text("Continuer")',
             'button:has-text("Allow")',
             'button:has-text("Authorize")',
             'button[type="submit"]',
@@ -1991,7 +2626,7 @@ def _complete_oauth_in_browser(page, oauth_start, proxy, log) -> dict | None:
                     if (el.offsetParent === null) continue;
                     const text = (el.textContent || '').trim().toLowerCase();
                     const ddName = el.getAttribute('data-dd-action-name') || '';
-                    if (ddName === 'Continue' || /continue|继续/i.test(text)) { target = el; break; }
+                    if (ddName === 'Continue' || /continue|继续|continuar|fortfahren|continuer/i.test(text)) { target = el; break; }
                 }
                 if (!target) target = Array.from(buttons).find(el => el.offsetParent !== null);
                 if (!target) return 'no-button';
@@ -2013,6 +2648,9 @@ def _complete_oauth_in_browser(page, oauth_start, proxy, log) -> dict | None:
         for sel in [
             'button:has-text("Continue")',
             'button:has-text("继续")',
+            'button:has-text("Continuar")',
+            'button:has-text("Fortfahren")',
+            'button:has-text("Continuer")',
             'button[type="submit"]',
         ]:
             try:
@@ -2034,7 +2672,7 @@ def _complete_oauth_in_browser(page, oauth_start, proxy, log) -> dict | None:
                     if (el.offsetParent === null) continue;
                     const text = (el.textContent || '').trim().toLowerCase();
                     const ddName = el.getAttribute('data-dd-action-name') || '';
-                    if (ddName === 'Continue' || /continue|继续/i.test(text)) {
+                    if (ddName === 'Continue' || /continue|继续|continuar|fortfahren|continuer/i.test(text)) {
                         el.focus();
                         el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
                         return text || 'dispatched';
@@ -2095,7 +2733,13 @@ def _complete_oauth_in_browser(page, oauth_start, proxy, log) -> dict | None:
             clicked = strategy_fn(round_idx + 1)
 
             if clicked:
-                time.sleep(2)
+                # consent 提交后会跳转到 localhost:1455/auth/callback
+                # 由于没有本地服务监听，浏览器可能报连接错误，但 URL 已经更新
+                try:
+                    page.wait_for_url("**/auth/callback*", timeout=15000)
+                except Exception:
+                    pass  # 超时或导航错误都忽略，下面会检查 URL
+                time.sleep(1)
                 result = _wait_for_callback(CLICK_EFFECT_TIMEOUT)
                 if result:
                     log("  ✓ 浏览器 OAuth consent 完成")
@@ -2658,9 +3302,9 @@ def _submit_about_you_via_page(page, log) -> dict:
                 .map((n) => String(n.textContent || '').trim().toLowerCase())
                 .filter(Boolean);
               const allText = labels.concat(placeholders).concat(headings);
-              const hasAge = allText.some((t) => t === 'age' || t.includes('how old') || t.includes('年龄'));
+              const hasAge = allText.some((t) => t === 'age' || t === 'edad' || t === 'âge' || t === 'alter' || t === 'idade' || t.includes('how old') || t.includes('年龄') || t.includes('나이'));
               const hasBirthday = allText.some((t) =>
-                t.includes('birthday') || t.includes('date of birth') || t.includes('birth') || t.includes('生日') || t.includes('出生')
+                t.includes('birthday') || t.includes('date of birth') || t.includes('birth') || t.includes('生日') || t.includes('出生') || t.includes('fecha de nacimiento') || t.includes('nascimento') || t.includes('geburtstag') || t.includes('naissance')
               );
               return { labels, placeholders, headings, hasAge, hasBirthday };
             }

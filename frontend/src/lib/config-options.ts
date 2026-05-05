@@ -9,8 +9,12 @@ export type ProviderField = {
   placeholder?: string
   secret?: boolean
   category?: string
-  type?: 'text' | 'select' | 'textarea'
+  hint?: string
+  type?: 'text' | 'select' | 'textarea' | 'toggle' | 'async-select'
   options?: Array<{ value: string; label: string }>
+  asyncUrl?: string
+  asyncValueKey?: string
+  asyncLabelKey?: string
 }
 
 export type ProviderOption = {

@@ -377,12 +377,38 @@ class HeroSmsProvider(BaseSmsProvider):
             return list(data.get("services") or [])
         if isinstance(data, list):
             return data
+        if isinstance(data, dict):
+            # 可能是 {"dr": {"name": "OpenAI", ...}, ...} 格式
+            result = []
+            for key, value in data.items():
+                if key in ("status", "message", "error"):
+                    continue
+                if isinstance(value, dict):
+                    if "code" not in value:
+                        value["code"] = key
+                    result.append(value)
+                elif isinstance(value, str):
+                    result.append({"code": key, "name": value})
+            if result:
+                return result
         raise RuntimeError("HeroSMS getServicesList returned unexpected response")
 
     def get_countries(self) -> list:
         data = self._request({"action": "getCountries"}, needs_key=False).json()
         if isinstance(data, list):
             return data
+        if isinstance(data, dict):
+            # HeroSMS 可能返回 {"0": {"id": 0, "eng": "Russia"}, ...} 格式
+            result = []
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    if "id" not in value:
+                        value["id"] = key
+                    result.append(value)
+                elif isinstance(value, str):
+                    result.append({"id": key, "eng": value, "name": value})
+            if result:
+                return result
         raise RuntimeError("HeroSMS getCountries returned unexpected response")
 
     def get_prices(self, service: str | None = None, country: str | int | None = None) -> dict:
@@ -395,6 +421,171 @@ class HeroSmsProvider(BaseSmsProvider):
         if isinstance(data, dict):
             return data
         raise RuntimeError("HeroSMS getPrices returned unexpected response")
+
+    def get_top_countries(self, service: str | None = None) -> list[dict]:
+        """获取指定服务按价格排序的国家列表（含价格和库存）。
+
+        优先使用 getTopCountriesByServiceRank API，降级到 getPrices 全量解析。
+        返回格式: [{"country": "66", "name": "Thailand", "price": 0.12, "count": 150}, ...]
+        """
+        service_code = str(service or self.default_service or HERO_SMS_DEFAULT_SERVICE).strip()
+
+        # 策略1: 使用 getTopCountriesByServiceRank（HeroSMS 专用排名接口）
+        for action in ("getTopCountriesByServiceRank", "getTopCountriesByService"):
+            try:
+                data = self._request({"action": action, "service": service_code}).json()
+                rows = self._parse_top_countries_response(data)
+                if rows:
+                    rows.sort(key=lambda r: (r.get("price") or 999, -(r.get("count") or 0)))
+                    return rows
+            except Exception:
+                continue
+
+        # 策略2: 从 getPrices 全量数据中解析
+        try:
+            prices = self.get_prices(service=service_code)
+            rows = []
+            for country_id, services in prices.items():
+                if not isinstance(services, dict):
+                    continue
+                svc_data = services.get(service_code)
+                if not isinstance(svc_data, dict):
+                    continue
+                price = svc_data.get("cost") or svc_data.get("price")
+                count = svc_data.get("count") or svc_data.get("qty") or svc_data.get("available")
+                try:
+                    price = float(price) if price is not None else None
+                except (TypeError, ValueError):
+                    price = None
+                try:
+                    count = int(count) if count is not None else 0
+                except (TypeError, ValueError):
+                    count = 0
+                if price is not None and count > 0:
+                    rows.append({"country": str(country_id), "price": price, "count": count})
+            rows.sort(key=lambda r: (r.get("price") or 999, -(r.get("count") or 0)))
+            return rows
+        except Exception:
+            return []
+
+    def _parse_top_countries_response(self, data) -> list[dict]:
+        """解析 getTopCountriesByServiceRank 响应。"""
+        rows = []
+        items = data
+        # 可能嵌套在 data/result 键下
+        if isinstance(data, dict):
+            items = data.get("data") or data.get("result") or data.get("response") or data
+        if isinstance(items, dict):
+            # {country_id: {price, count, ...}} 格式
+            for key, value in items.items():
+                if not isinstance(value, dict):
+                    continue
+                try:
+                    country_id = str(int(key))
+                except (TypeError, ValueError):
+                    continue
+                price = value.get("price") or value.get("cost") or value.get("retail_price")
+                count = value.get("count") or value.get("qty") or value.get("available") or value.get("stock")
+                name = value.get("name") or value.get("countryName") or value.get("country_name") or ""
+                try:
+                    price = float(price) if price is not None else None
+                except (TypeError, ValueError):
+                    price = None
+                try:
+                    count = int(count) if count is not None else 0
+                except (TypeError, ValueError):
+                    count = 0
+                if price is not None:
+                    rows.append({"country": country_id, "name": str(name), "price": price, "count": count})
+        elif isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                country_id = item.get("country") or item.get("countryId") or item.get("country_id") or item.get("id")
+                if country_id is None:
+                    continue
+                price = item.get("price") or item.get("cost") or item.get("retail_price") or item.get("retailPrice")
+                count = item.get("count") or item.get("qty") or item.get("available") or item.get("stock") or item.get("total")
+                name = item.get("name") or item.get("countryName") or item.get("country_name") or item.get("title") or ""
+                try:
+                    price = float(price) if price is not None else None
+                except (TypeError, ValueError):
+                    price = None
+                try:
+                    count = int(count) if count is not None else 0
+                except (TypeError, ValueError):
+                    count = 0
+                if price is not None:
+                    rows.append({"country": str(country_id), "name": str(name), "price": price, "count": count})
+        return rows
+
+    def get_best_country(self, service: str | None = None, *, min_stock: int = 20, max_price: float = 0) -> str | None:
+        """自动选择最优国家：价格最低且库存充足。
+
+        Args:
+            service: 服务代码（默认使用 self.default_service）
+            min_stock: 最低库存要求（默认 20）
+            max_price: 最高价格限制（0 表示不限）
+
+        Returns:
+            最优国家 ID 字符串，或 None（无可用国家）
+        """
+        # HeroSMS 中已验证对 OpenAI 走 SMS（非 WhatsApp）的国家白名单
+        # OpenAI 2025年起对大量国家改用 WhatsApp 验证，HeroSMS 无法接收 WhatsApp
+        # 以下国家经测试确认走 SMS：
+        ALLOWED_COUNTRIES = {
+            "29",   # Serbia
+            "32",   # Romania
+            "33",   # Colombia
+            "39",   # Argentina
+            "46",   # Sweden
+            "52",   # Thailand (已验证走SMS)
+            "54",   # Mexico
+            "56",   # Spain
+            "62",   # Turkey
+            "63",   # Czech
+            "84",   # Hungary
+            "85",   # Moldova
+            "117",  # Portugal
+            "148",  # Armenia
+            "151",  # Chile
+        }
+
+        try:
+            rows = self.get_top_countries(service=service)
+        except Exception as exc:
+            logger.warning("get_best_country 查询失败: %s", exc)
+            return None
+
+        if not rows:
+            return None
+
+        for row in rows:
+            country_id = str(row.get("country") or "")
+            if country_id not in ALLOWED_COUNTRIES:
+                continue
+            price = row.get("price") or 0
+            count = row.get("count") or 0
+            if count < min_stock:
+                continue
+            if max_price > 0 and price > max_price:
+                continue
+            return country_id
+
+        # 如果没有满足 min_stock 的，放宽到 count > 0
+        for row in rows:
+            country_id = str(row.get("country") or "")
+            if country_id not in ALLOWED_COUNTRIES:
+                continue
+            price = row.get("price") or 0
+            count = row.get("count") or 0
+            if count <= 0:
+                continue
+            if max_price > 0 and price > max_price:
+                continue
+            return country_id
+
+        return None
 
     def _cache_identity(self, service: str, country: str) -> dict:
         return {
@@ -462,12 +653,29 @@ class HeroSmsProvider(BaseSmsProvider):
 
     def _request_number_raw(self, service: str, country: str) -> dict:
         common = {"service": service, "country": country}
-        # HeroSMS API 在不传 maxPrice 时某些国家/服务返回 NO_NUMBERS
-        # 传一个较大的值表示"不限价格"
-        if self.max_price > 0:
-            common["maxPrice"] = self.max_price
-        else:
-            common["maxPrice"] = 1
+
+        # 动态获取该国家该服务的实际价格，用实际价格作为 maxPrice
+        # 这样能确保拿到物理号码（而不是被分配虚拟号码）
+        effective_max_price = self.max_price if self.max_price > 0 else 1
+        try:
+            prices = self.get_prices(service=service, country=country)
+            # getPrices 返回格式: {country_id: {service_code: {cost, count}}}
+            country_prices = prices.get(str(country)) or prices.get(country) or {}
+            service_prices = country_prices.get(service) or {}
+            actual_cost = service_prices.get("cost") or service_prices.get("price")
+            if actual_cost is not None:
+                actual_cost = float(actual_cost)
+                # 用实际价格的 2 倍作为 maxPrice，确保能拿到物理号码
+                dynamic_max = round(actual_cost * 2, 4)
+                if self.max_price > 0:
+                    effective_max_price = min(self.max_price, max(dynamic_max, actual_cost + 0.05))
+                else:
+                    effective_max_price = max(dynamic_max, 0.15)
+        except Exception:
+            pass  # 查询失败就用默认值
+
+        common["maxPrice"] = effective_max_price
+
         v2_error = ""
         try:
             resp = self._request({"action": "getNumberV2", **common})
@@ -884,16 +1092,50 @@ class PhoneCallbackController:
             if self.provider_key == "herosms" and not self._verify_lock_acquired:
                 _HERO_SMS_VERIFY_LOCK.acquire()
                 self._verify_lock_acquired = True
-            country_label = self.country or self.config.get("sms_country") or self.config.get("sms_activate_country") or "default"
+
+            # 智能国家选择：如果启用了 auto_select_country，自动查询最优国家
+            effective_country = self.country
+            auto_select = _safe_bool(self.config.get("herosms_auto_country"), False)
+            if auto_select and isinstance(provider, HeroSmsProvider):
+                self.log("正在查询最优国家（价格最低 + 库存充足）...")
+                try:
+                    min_stock = _safe_int(self.config.get("herosms_auto_country_min_stock"), 20)
+                    max_price_limit = _safe_float(self.config.get("herosms_auto_country_max_price"), 0)
+                    best = provider.get_best_country(
+                        service=self.service,
+                        min_stock=min_stock,
+                        max_price=max_price_limit,
+                    )
+                    if best:
+                        self.log(f"自动选择最优国家: {best}")
+                        effective_country = best
+                    else:
+                        self.log("未找到满足条件的国家，使用默认配置")
+                except Exception as exc:
+                    self.log(f"智能国家选择失败({exc})，使用默认配置")
+
+            country_label = effective_country or self.config.get("sms_country") or self.config.get("sms_activate_country") or "default"
             self.log(f"已进入 add_phone，准备租用手机号: provider={self.provider_key} service={self.service} country={country_label}")
             self.log(f"正在从 {self.provider_key} 获取手机号...")
             try:
-                self.activation = provider.get_number(service=self.service, country=self.country)
-            except Exception:
-                if self._verify_lock_acquired:
-                    _HERO_SMS_VERIFY_LOCK.release()
-                    self._verify_lock_acquired = False
-                raise
+                self.activation = provider.get_number(service=self.service, country=effective_country)
+            except Exception as first_exc:
+                # 如果是自动选择的国家失败了，回退到默认国家重试
+                fallback_country = self.country or self.config.get("sms_country") or self.config.get("herosms_country") or ""
+                if auto_select and effective_country != fallback_country and fallback_country:
+                    self.log(f"自动选择的国家({effective_country})获取号码失败，回退到默认国家({fallback_country})...")
+                    try:
+                        self.activation = provider.get_number(service=self.service, country=fallback_country)
+                    except Exception:
+                        if self._verify_lock_acquired:
+                            _HERO_SMS_VERIFY_LOCK.release()
+                            self._verify_lock_acquired = False
+                        raise
+                else:
+                    if self._verify_lock_acquired:
+                        _HERO_SMS_VERIFY_LOCK.release()
+                        self._verify_lock_acquired = False
+                    raise
             self.phase = "need_code"
             reused = bool((self.activation.metadata or {}).get("reused"))
             reuse_label = "复用号码" if reused else "新号码"
@@ -902,7 +1144,7 @@ class PhoneCallbackController:
 
         if self.phase == "need_code" and self.activation:
             self.log(f"等待短信验证码... (activation_id={self.activation.activation_id})")
-            code = provider.get_code(self.activation.activation_id, timeout=120)
+            code = provider.get_code(self.activation.activation_id, timeout=180)
             if code:
                 self.log(f"收到验证码: {code}")
                 if getattr(provider, "auto_report_success_on_code", True):

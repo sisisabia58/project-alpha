@@ -184,6 +184,7 @@ class OAuthStart:
     state: str
     code_verifier: str
     redirect_uri: str
+    client_id: str = OAUTH_CLIENT_ID
 
 
 def generate_oauth_url(
@@ -232,6 +233,7 @@ def generate_oauth_url(
         state=state,
         code_verifier=code_verifier,
         redirect_uri=redirect_uri,
+        client_id=client_id,
     )
 
 

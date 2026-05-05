@@ -80,3 +80,63 @@ def herosms_prices(body: HeroSmsQueryRequest | None = None):
         return {"prices": provider.get_prices(service=service, country=country)}
     except Exception as exc:
         raise HTTPException(502, str(exc))
+
+
+class HeroSmsBestCountryRequest(BaseModel):
+    api_key: str = ""
+    service: str = ""
+    proxy: str = ""
+    min_stock: int = 20
+    max_price: float = 0
+    top_n: int = 10
+
+
+@router.post("/herosms/top-countries")
+def herosms_top_countries(body: HeroSmsBestCountryRequest | None = None):
+    """获取按价格排序的国家列表（含价格和库存）。"""
+    body = body or HeroSmsBestCountryRequest()
+    provider = _provider_from_payload(HeroSmsQueryRequest(
+        api_key=body.api_key, service=body.service, proxy=body.proxy,
+    ))
+    if not provider.api_key:
+        raise HTTPException(400, "HeroSMS API Key 未配置")
+    try:
+        service = str(body.service or provider.default_service or HERO_SMS_DEFAULT_SERVICE)
+        rows = provider.get_top_countries(service=service)
+        # 只返回有库存的
+        rows = [r for r in rows if (r.get("count") or 0) > 0]
+        if body.top_n > 0:
+            rows = rows[:body.top_n]
+        return {"countries": rows, "service": service}
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+
+
+@router.post("/herosms/best-country")
+def herosms_best_country(body: HeroSmsBestCountryRequest | None = None):
+    """自动选择最优国家（价格最低 + 库存充足）。"""
+    body = body or HeroSmsBestCountryRequest()
+    provider = _provider_from_payload(HeroSmsQueryRequest(
+        api_key=body.api_key, service=body.service, proxy=body.proxy,
+    ))
+    if not provider.api_key:
+        raise HTTPException(400, "HeroSMS API Key 未配置")
+    try:
+        service = str(body.service or provider.default_service or HERO_SMS_DEFAULT_SERVICE)
+        best = provider.get_best_country(
+            service=service,
+            min_stock=body.min_stock,
+            max_price=body.max_price,
+        )
+        if best:
+            # 获取详细信息
+            rows = provider.get_top_countries(service=service)
+            detail = next((r for r in rows if str(r.get("country")) == str(best)), None)
+            return {
+                "country": best,
+                "detail": detail,
+                "service": service,
+            }
+        return {"country": None, "detail": None, "service": service}
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
