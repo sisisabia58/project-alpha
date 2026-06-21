@@ -472,11 +472,12 @@ class DuolingoBrowserRegister:
         stall_steps = 0
 
         # URLs that signal we have reached the sign-up / profile form.
-        # When Duolingo lands on any of these, stop the onboarding wizard loop
-        # so the form-filling code can take over.
-        _FORM_URL_MARKERS = ("/welcome", "/profile", "/name", "/age", "/signup")
+        # NOTE: /welcome is intentionally NOT here — it is a Duo mascot animation
+        # sequence (Phase 1 screenshots confirmed) with a LANJUTKAN button.
+        # Only exit when we see actual form inputs or a dedicated form URL.
+        _FORM_URL_MARKERS = ("/profile", "/name", "/age", "/signup", "/create-profile")
 
-        for step in range(30):
+        for step in range(35):
             try:
                 current_url = page.url
 
@@ -488,7 +489,6 @@ class DuolingoBrowserRegister:
                 # ── Exit: URL reached a known form / profile page ─────────────
                 if any(marker in current_url for marker in _FORM_URL_MARKERS):
                     self.log(f"Reached form page: {current_url} — waiting for email input...")
-                    # Give React up to 5s to mount the form fields
                     try:
                         page.locator('input[type="email"]').wait_for(state="visible", timeout=5000)
                     except Exception:
@@ -505,14 +505,15 @@ class DuolingoBrowserRegister:
                     # before querying for option cards or Continue buttons
                     page.wait_for_timeout(2000)
 
-                # ── Select an option card ─────────────────────────────────────
-                # Do NOT use force=True — bypasses React synthetic event
-                # handlers; card appears selected but state never updates.
+                # ── Select an option card or list item ──────────────────────────
+                # Covers: grid language cards, native language list items, radio buttons.
+                # Do NOT use force=True — bypasses React synthetic event handlers.
                 clicked_option = False
                 for sel in [
                     'button[role="radio"]',
                     '[data-test*="-card"]:not([data-test*="register"])',
                     '[data-test*="card"]:not([data-test*="register"])',
+                    'ul li a',
                     'ul li button',
                     '[aria-checked="false"]',
                 ]:
@@ -556,12 +557,12 @@ class DuolingoBrowserRegister:
                         except Exception:
                             pass
 
-                # Priority 2: role=button with known labels
+                # Priority 2: role=button with known labels (incl. LANJUTKAN = Indonesian Continue)
                 if not clicked_continue:
                     btn = page.get_by_role("button", name=re.compile(
                         r"Continue|Next|Confirm|OK|Done|Submit|Got it|Start|"
+                        r"Lanjutkan|Lanjut|Mulai|Bắt đầu|Tiếp tục|"
                         r"继续|下一步|开始|完成|确认|"
-                        r"Tiếp tục|Lanjut|Mulai|Bắt đầu|"
                         r"Continuar|Confirmar|Empezar|Começar",
                         re.I
                     )).first
