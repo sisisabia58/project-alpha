@@ -269,8 +269,51 @@ class DuolingoBrowserRegister:
         # Handle onboarding wizard (skipped automatically if /register lands on the form directly)
         self._click_through_onboarding(page)
 
-        # Fill registration details
+        # ── Reveal email/password form on /welcome ───────────────────────────
+        # After the onboarding wizard, Duolingo's /welcome page shows social-login
+        # options (Google, Apple, Facebook) PLUS a "Sign up with email" button.
+        # The actual input fields only appear AFTER clicking that button.
+        self.log("Looking for 'Sign up with email' button to reveal form...")
+        _email_signup_btn = page.get_by_role("button", name=re.compile(
+            r"Sign up with email|Use email|Continue with email|Create account with email|"
+            r"Daftar dengan email|Đăng ký bằng email|Registrarse con correo|Criar conta com e-mail|"
+            r"用邮箱注册|用电子邮件注册",
+            re.I
+        )).first
+        # Also try by href/link patterns (Duolingo sometimes uses an <a> tag)
+        _email_signup_link = page.locator(
+            'a[href*="email"], button[data-test*="email"], [data-test="email-signup-button"]'
+        ).first
+
+        _clicked_email_btn = False
+        for _candidate in [_email_signup_btn, _email_signup_link]:
+            try:
+                if _candidate.is_visible():
+                    self.log("Clicking 'Sign up with email'...")
+                    _candidate.click(timeout=5000)
+                    page.wait_for_timeout(2000)
+                    _clicked_email_btn = True
+                    break
+            except Exception:
+                continue
+
+        if not _clicked_email_btn:
+            self.log("No 'Sign up with email' button found — form may already be visible")
+
+        # ── Fill registration details ─────────────────────────────────────────
         self.log("Filling profile registration form...")
+
+        # Wait for the email input to actually appear before filling anything
+        _email_input = page.locator('input[type="email"]').first
+        try:
+            _email_input.wait_for(state="visible", timeout=15000)
+        except Exception as e:
+            raise RuntimeError(
+                f"Email input never appeared on {page.url} after clicking 'Sign up with email'. "
+                f"The form may have a different structure. Original error: {e}"
+            )
+
+        # Optional: age / birthday field (some variants omit it)
         _age_selector = (
             'input[data-test*="age" i], '
             'input[placeholder*="Age" i], input[placeholder*="Birthday" i], '
@@ -280,11 +323,12 @@ class DuolingoBrowserRegister:
         )
         age_input = page.locator(_age_selector).first
         try:
-            age_input.wait_for(state="visible", timeout=12000)
+            age_input.wait_for(state="visible", timeout=4000)
             age_input.fill(str(random.randint(22, 45)))
         except Exception:
-            self.log("No age/birthday input found — skipping (form variant without age field)")
+            self.log("No age/birthday input found — skipping")
 
+        # Optional: name field
         name_input = page.locator(
             'input[placeholder*="Name" i], input[placeholder*="姓名" i], input[placeholder*="Tên" i], '
             'input[placeholder*="Nombre" i], input[placeholder*="Nome" i], input[placeholder*="Nama" i]'
@@ -292,7 +336,8 @@ class DuolingoBrowserRegister:
         if name_input.count() and name_input.is_visible():
             name_input.fill(email.split("@")[0])
 
-        page.locator('input[type="email"]').first.fill(email)
+        # Fill email and password (email input already confirmed visible above)
+        _email_input.fill(email)
         page.locator('input[type="password"]').first.fill(password)
 
         # Submit form
