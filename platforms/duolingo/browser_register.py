@@ -345,13 +345,29 @@ class DuolingoBrowserRegister:
         prev_url = page.url
         stall_steps = 0
 
+        # URLs that signal we have reached the sign-up / profile form.
+        # When Duolingo lands on any of these, stop the onboarding wizard loop
+        # so the form-filling code can take over.
+        _FORM_URL_MARKERS = ("/welcome", "/profile", "/name", "/age", "/signup")
+
         for step in range(30):
             try:
                 current_url = page.url
 
-                # ── Exit: sign-up form reached ────────────────────────────────
+                # ── Exit: sign-up form reached (email input visible) ──────────
                 if page.locator('input[type="email"]').count() > 0:
                     self.log("Sign-up form visible. Exiting onboarding loop.")
+                    break
+
+                # ── Exit: URL reached a known form / profile page ─────────────
+                if any(marker in current_url for marker in _FORM_URL_MARKERS):
+                    self.log(f"Reached form page: {current_url} — waiting for email input...")
+                    # Give React up to 5s to mount the form fields
+                    try:
+                        page.locator('input[type="email"]').wait_for(state="visible", timeout=5000)
+                    except Exception:
+                        pass
+                    self.log("Exiting onboarding loop (form URL detected).")
                     break
 
                 # Log URL transitions so we know where we are
@@ -359,6 +375,9 @@ class DuolingoBrowserRegister:
                     self.log(f"Step {step}: Navigated to {current_url}")
                     prev_url = current_url
                     stall_steps = 0
+                    # Wait 2s for React to settle and render new page content
+                    # before querying for option cards or Continue buttons
+                    page.wait_for_timeout(2000)
 
                 # ── Select an option card ─────────────────────────────────────
                 # Do NOT use force=True — bypasses React synthetic event
