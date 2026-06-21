@@ -10,8 +10,7 @@ UA = (
 )
 
 # ---------------------------------------------------------------------------
-# Chromium stability flags
-# --no-zygote omitted — no-op on Windows, can harm Linux renderer stability.
+# Chromium stability flags — keeps headless renderer alive on memory-limited hosts
 # ---------------------------------------------------------------------------
 _LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
@@ -29,9 +28,8 @@ _LAUNCH_ARGS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Resource blocking — images/media/fonts are the memory hogs.
-# stylesheet is intentionally NOT blocked: Duolingo uses CSS classes to
-# control visibility; without CSS all locator.wait_for(visible) calls hang.
+# Resource blocking — cuts renderer memory ~60%.
+# stylesheet intentionally NOT blocked (CSS needed for React visibility).
 # ---------------------------------------------------------------------------
 _BLOCKED_RESOURCE_TYPES = {"image", "media", "font"}
 _BLOCKED_URL_PATTERNS = [
@@ -48,7 +46,7 @@ def _proxy_config(proxy: str | None) -> dict | None:
 
 
 def _block_heavy_resources(page: Page) -> None:
-    """Block resource types / URLs that don't help registration but eat memory."""
+    """Abort resources that don't help registration but eat renderer memory."""
     def _handler(route):
         if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
             route.abort()
@@ -84,7 +82,7 @@ class DuolingoBrowserRegister:
 
         for attempt in range(1, max_attempts + 1):
             if attempt > 1:
-                self.log(f"Retry attempt {attempt}/{max_attempts} after previous crash...")
+                self.log(f"Retry attempt {attempt}/{max_attempts} after crash...")
 
             with sync_playwright() as pw:
                 browser = None
@@ -103,15 +101,14 @@ class DuolingoBrowserRegister:
                     _block_heavy_resources(page)
 
                     try:
-                        result = self._do_register(page, context, email, password)
-                        return result
+                        return self._do_register(page, context, email, password)
                     except Exception as exc:
                         err = str(exc)
                         if "crashed" in err.lower() or "page crash" in err.lower():
                             self.log(f"Attempt {attempt}: Page crashed — retrying. ({err})")
                             last_error = exc
                             continue
-                        self.log(f"Duolingo registration process failed: {exc}")
+                        self.log(f"Registration failed: {exc}")
                         raise
                 finally:
                     try:
@@ -121,12 +118,11 @@ class DuolingoBrowserRegister:
                         pass
 
         raise RuntimeError(
-            f"Duolingo registration failed after {max_attempts} attempts. "
-            f"Last error: {last_error}"
+            f"Registration failed after {max_attempts} attempts. Last error: {last_error}"
         )
 
     def redeem_code(self, email: str, password: str, cookies: List[Dict], referral_code: str) -> dict:
-        self.log(f"Starting Duolingo redemption for {email} with code: {referral_code}")
+        self.log(f"Starting Duolingo code redemption for {email}: {referral_code}")
         with sync_playwright() as pw:
             launch_opts: dict = {"headless": self.headless, "args": _LAUNCH_ARGS}
             p = _proxy_config(self.proxy)
@@ -149,14 +145,12 @@ class DuolingoBrowserRegister:
                 page.wait_for_timeout(3000)
 
                 if "/log-in" in page.url or "/register" in page.url or page.locator('input[type="email"]').count() > 0:
-                    self.log("Stored cookies expired — logging in directly...")
+                    self.log("Cookies expired — logging in...")
                     page.goto("https://www.duolingo.com/log-in", wait_until="domcontentloaded", timeout=60000)
-                    page.locator(
-                        'input[type="email"], input[placeholder*="Email" i], input[placeholder*="username" i]'
-                    ).first.fill(email)
-                    page.locator('input[type="password"]').first.fill(password)
+                    page.locator('[data-test="email-input"], input[type="email"]').first.fill(email)
+                    page.locator('[data-test="password-input"], input[type="password"]').first.fill(password)
                     page.get_by_role("button", name=re.compile(
-                        "Log in|登录|Đăng nhập|Masuk|Iniciar sesión|Entrar", re.I
+                        r"Log in|Masuk|Đăng nhập|登录|Iniciar sesión|Entrar", re.I
                     )).first.click()
                     page.wait_for_url(re.compile(r"/(learn|home)"), timeout=45000)
                     page.goto("https://www.duolingo.com/redeem", wait_until="domcontentloaded", timeout=60000)
@@ -169,7 +163,7 @@ class DuolingoBrowserRegister:
                 code_input.fill(referral_code)
 
                 page.get_by_role("button", name=re.compile(
-                    "Redeem|Submit|Claim|兑换|Áp dụng|Klaim|Canjear|Resgatar", re.I
+                    r"Redeem|Submit|Claim|Klaim|兑换|Áp dụng|Canjear|Resgatar", re.I
                 )).first.click()
                 page.wait_for_timeout(5000)
 
@@ -177,241 +171,227 @@ class DuolingoBrowserRegister:
                 page.wait_for_timeout(3000)
 
                 if "Super Duolingo" in page.locator("body").inner_text():
-                    self.log("Super Duolingo is ACTIVE!")
+                    self.log("Super Duolingo ACTIVE!")
                     return {"success": True, "cookies": context.cookies()}
-                else:
-                    return {"success": False, "error": "Super Duolingo not active after redemption."}
+                return {"success": False, "error": "Super Duolingo not active after redemption."}
             except Exception as e:
-                self.log(f"Redemption flow error: {e}")
+                self.log(f"Redemption error: {e}")
                 return {"success": False, "error": str(e)}
             finally:
                 context.close()
                 browser.close()
 
     # ──────────────────────────────────────────────────────────────────────
-    # Internal helpers
+    # Internal
     # ──────────────────────────────────────────────────────────────────────
 
     def _do_register(self, page: Page, context: BrowserContext, email: str, password: str) -> dict:
         """
         Execute the full Duolingo registration flow.
 
-        Confirmed flow (from user screenshots, June 2025):
-          1. en.duolingo.com          → homepage  → click GET STARTED
-          2. /register                → "I want to learn" language cards → click one
-          3. /register                → "What language do you speak?" list → click one
-          4. /welcome                 → Duo mascot animation (multiple screens) → click LANJUTKAN
-          5. /welcome?welcomeStep=... → "Dari mana kamu tahu?" option grid → click one → LANJUTKAN
-          6. /learn                   → "Berapa banyak?" modal → click ✕ to close
-          7. /learn                   → main page → click BUAT PROFIL
-          8. /learn?isLoggingIn=true  → "Berapa umurmu?" age field → fill + click BERIKUTNYA
-          9. /learn?isLoggingIn=true  → "Buat profilmu" form → fill Nama/Email/Kata sandi → BUAT AKUN
+        Flow verified via Playwright CRX recording (June 2025):
+
+          1. Homepage           → click [data-test="get-started-top"]
+          2. /register          → click [data-test*="language-card"] (first card)
+          3. /welcome           → click [data-test="funboarding-continue-button"] × N
+          4. /welcome?step=...  → click ← back button (empty-text button)  ← skips survey
+          5. /learn             → click [data-test="close-button"]           ← closes level modal
+          6. /learn             → click [data-test="create-profile-juicy"]
+          7. /learn?isLoggingIn → fill  [data-test="age-input"] + click [data-test="continue-button"]
+          8. /learn?isLoggingIn → fill  [data-test="full-name-input"]
+                                   fill  [data-test="email-input"]
+                                   fill  [data-test="password-input"]
+                                   click [data-test="register-button"]
         """
-        # ── Navigate to /register ─────────────────────────────────────────
-        self.log("Navigating to Duolingo registration page...")
-        page.goto("https://www.duolingo.com/register", wait_until="domcontentloaded", timeout=60000)
+
+        # ── Step 1: Homepage → GET STARTED ────────────────────────────────
+        self.log("Navigating to Duolingo homepage...")
+        page.goto("https://www.duolingo.com/", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(2000)
         self.log(f"Landed on: {page.url}")
 
-        # If redirected to homepage, click GET STARTED
-        if "/register" not in page.url and "/onboarding" not in page.url:
-            self.log("Redirected to homepage — clicking GET STARTED...")
-            _gs = page.locator('[data-test="get-started"]')
-            if _gs.count() > 0 and _gs.first.is_visible():
-                _gs.first.click(timeout=10000)
-            else:
-                _gs2 = page.get_by_role("button", name=re.compile(
-                    r"Get started|开始|开始学习|Bắt đầu|Mulai|Empezar|Começar", re.I
-                )).first
-                try:
-                    _gs2.wait_for(state="visible", timeout=10000)
-                    _gs2.click(timeout=10000)
-                except Exception:
-                    self.log("GET STARTED not found — continuing anyway")
-            page.wait_for_timeout(1500)
-
-        # ── PHASE 1: Click through onboarding wizard until /learn ─────────
-        # Handles: language grid, native language list, /welcome animation
-        # screens, /welcome?welcomeStep=hdyhau "where did you hear" screen.
-        self._click_through_onboarding(page)
-        self.log(f"Onboarding complete — now on: {page.url}")
-
-        # ── PHASE 2: Close the knowledge-level modal on /learn ────────────
-        # Screenshot: "Berapa banyak bahasa Inggris yang kamu tahu?" popup
-        # with an ✕ button at top-left. Must be dismissed before BUAT PROFIL.
-        self.log("Phase 2: Closing level-selection modal...")
-        _closed = False
-        for _dt_close in ["close-button", "modal-close", "dismiss-button"]:
-            _cl = page.locator(f'[data-test="{_dt_close}"]')
-            if _cl.count() > 0:
-                try:
-                    _cl.first.wait_for(state="visible", timeout=1500)
-                    _cl.first.click(timeout=3000)
-                    page.wait_for_timeout(1000)
-                    _closed = True
-                    break
-                except Exception:
-                    pass
-
-        if not _closed:
-            for _b in page.locator("button").all():
-                try:
-                    _txt = (_b.inner_text() or "").strip()
-                    if _txt in ("×", "✕", "✗", "X", "x", "❌") and _b.is_visible():
-                        self.log(f"Closing modal via '{_txt}' button...")
-                        _b.click(timeout=3000)
-                        page.wait_for_timeout(1000)
-                        _closed = True
-                        break
-                except Exception:
-                    continue
-
-        if not _closed:
-            for _aria in ['button[aria-label*="close" i]', 'button[aria-label*="tutup" i]']:
-                _cl = page.locator(_aria)
-                if _cl.count() > 0 and _cl.first.is_visible():
-                    try:
-                        _cl.first.click(timeout=3000)
-                        page.wait_for_timeout(1000)
-                        _closed = True
-                        break
-                    except Exception:
-                        pass
-
-        if not _closed:
-            self.log("No close button found for level modal — continuing anyway")
-
-        page.wait_for_timeout(1500)
-
-        # ── PHASE 3: Click "BUAT PROFIL" on the /learn main page ─────────
-        # Screenshot: right panel shows "Buat profil untuk menyimpan progresmu!"
-        # green "BUAT PROFIL" button + blue "MASUK" button.
-        self.log("Phase 3: Clicking BUAT PROFIL...")
-        _buat_profil = page.get_by_role("button", name=re.compile(
-            r"Buat profil|Create profile|Create account|Sign up|Daftar|"
-            r"Tạo hồ sơ|Tạo tài khoản|Criar perfil|Crear perfil",
-            re.I
-        )).first
+        self.log("Clicking GET STARTED (get-started-top)...")
+        _gs = page.locator('[data-test="get-started-top"]')
         try:
-            _buat_profil.wait_for(state="visible", timeout=10000)
+            _gs.wait_for(state="visible", timeout=15000)
+            _gs.click(timeout=10000)
+        except Exception:
+            # Fallback: try the main CTA button
+            self.log("get-started-top not found — trying get-started...")
+            _gs2 = page.locator('[data-test="get-started"]')
+            if _gs2.count() > 0 and _gs2.first.is_visible():
+                _gs2.first.click(timeout=10000)
+            else:
+                page.get_by_role("button", name=re.compile(
+                    r"Get started|Mulai|Empezar|Começar|Bắt đầu|开始", re.I
+                )).first.click(timeout=10000)
+        page.wait_for_timeout(2000)
+
+        # ── Step 2: Language grid → click first card ──────────────────────
+        # Recorded: [data-test="flag-english language-card"]
+        # We use a wildcard to pick any available language card
+        self.log("Selecting language to learn (first available card)...")
+        _card = page.locator('[data-test*="language-card"]').first
+        try:
+            _card.wait_for(state="visible", timeout=15000)
+            _card.click(timeout=8000)
+            self.log(f"Language card clicked.")
+        except Exception as e:
+            raise RuntimeError(f"Language card not found: {e}")
+        page.wait_for_timeout(2000)
+
+        # ── Optional: Native language list ────────────────────────────────
+        # Some locales show "What language do you speak?" before funboarding.
+        # If it appears, click the first list item and continue.
+        try:
+            _native = page.locator('ul li a, ul li button').first
+            if _native.is_visible():
+                self.log("Native language selection found — clicking first option...")
+                _native.click(timeout=3000)
+                page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+        # ── Step 3: Funboarding LANJUTKAN screens ────────────────────────
+        # Recorded: funboarding-continue-button clicked twice (animation screens).
+        # We loop until it's gone (handles variable number of animation screens).
+        self.log("Clicking through funboarding screens (LANJUTKAN)...")
+        for _i in range(8):
+            try:
+                _fbd = page.locator('[data-test="funboarding-continue-button"]')
+                _fbd.first.wait_for(state="visible", timeout=3000)
+                if _fbd.first.is_enabled():
+                    self.log(f"LANJUTKAN #{_i + 1}...")
+                    _fbd.first.click(timeout=5000)
+                    page.wait_for_timeout(1500)
+                else:
+                    break
+            except Exception:
+                break  # Button gone — funboarding complete
+
+        # ── Step 4: Skip "Dari mana kamu tahu?" survey ───────────────────
+        # Recorded: getByRole('button').filter({ hasText: /^$/ })
+        # The ← back arrow button has no visible text (icon only).
+        # Clicking it navigates directly to /learn, skipping the survey.
+        self.log("Clicking back (←) to skip survey screen...")
+        try:
+            _back = page.get_by_role("button").filter(has_text=re.compile(r"^$")).first
+            if _back.is_visible():
+                self.log("Back button (empty text) clicked.")
+                _back.click(timeout=5000)
+                page.wait_for_timeout(1500)
+            else:
+                # Fallback: navigate to /learn directly
+                self.log("Back button not visible — navigating to /learn directly...")
+                page.goto("https://www.duolingo.com/learn", wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(2000)
+        except Exception as e:
+            self.log(f"Back button: {e} — navigating to /learn directly...")
+            page.goto("https://www.duolingo.com/learn", wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(2000)
+
+        # ── Step 5: Close level-selection modal on /learn ─────────────────
+        # Recorded: [data-test="close-button"] (the ✕ on "Berapa banyak?" modal)
+        self.log("Closing level-selection modal (close-button)...")
+        try:
+            _close = page.locator('[data-test="close-button"]')
+            _close.first.wait_for(state="visible", timeout=10000)
+            _close.first.click(timeout=5000)
+            self.log("Level modal closed.")
+            page.wait_for_timeout(1500)
+        except Exception as e:
+            self.log(f"close-button not found ({e}) — continuing")
+
+        # ── Step 6: Click "BUAT PROFIL" ───────────────────────────────────
+        # Recorded: [data-test="create-profile-juicy"]
+        self.log("Clicking BUAT PROFIL (create-profile-juicy)...")
+        _buat_profil = page.locator('[data-test="create-profile-juicy"]')
+        try:
+            _buat_profil.wait_for(state="visible", timeout=12000)
             _buat_profil.click(timeout=5000)
             self.log("BUAT PROFIL clicked.")
             page.wait_for_timeout(2000)
         except Exception as e:
-            self.log(f"BUAT PROFIL not found ({e}) — checking if age form already appeared")
+            raise RuntimeError(f"create-profile-juicy not found on {page.url}: {e}")
 
-        # ── PHASE 4: Age form ─────────────────────────────────────────────
+        # ── Step 7: Age form ──────────────────────────────────────────────
         # URL: /learn?isLoggingIn=true
-        # Screenshot: "Berapa umurmu?" | input placeholder "Umur" | button "BERIKUTNYA"
-        self.log("Phase 4: Filling age form (Berapa umurmu?)...")
-        _age_input = page.locator(
-            'input[placeholder*="Umur" i], '
-            'input[placeholder*="Age" i], '
-            'input[placeholder*="Tuổi" i], '
-            'input[placeholder*="Edad" i], '
-            'input[data-test*="age" i], '
-            'input[type="number"]'
-        ).first
+        # Recorded: [data-test="age-input"].fill("23") → [data-test="continue-button"].click()
+        self.log("Filling age form...")
+        _age = page.locator('[data-test="age-input"]')
         try:
-            _age_input.wait_for(state="visible", timeout=8000)
+            _age.wait_for(state="visible", timeout=8000)
             _age_val = str(random.randint(22, 35))
-            _age_input.fill(_age_val)
-            self.log(f"Filled age: {_age_val}")
+            _age.fill(_age_val)
+            self.log(f"Age: {_age_val}")
 
-            # BERIKUTNYA = Next in Indonesian — enabled after a valid age is typed
-            _next_btn = page.get_by_role("button", name=re.compile(
-                r"Berikutnya|Next|Selanjutnya|Continue|Lanjut|Tiếp theo|Siguiente",
-                re.I
-            )).first
+            # continue-button enables only after a valid age is entered
+            _cont = page.locator('[data-test="continue-button"]')
             for _ in range(10):
-                if _next_btn.is_enabled():
+                if _cont.is_enabled():
                     break
                 page.wait_for_timeout(400)
-            _next_btn.click(timeout=5000)
+            _cont.click(timeout=5000)
             self.log("BERIKUTNYA clicked.")
             page.wait_for_timeout(2000)
         except Exception as e:
             self.log(f"Age form: {e} — continuing to registration form")
 
-        # ── PHASE 5: Registration form ────────────────────────────────────
-        # URL: /learn?isLoggingIn=true  (same URL, different modal)
-        # Screenshot fields: Nama (opsional) | Email | Kata sandi
-        # Submit button: BUAT AKUN
-        self.log("Phase 5: Filling registration form (Buat profilmu)...")
+        # ── Step 8: Registration form ─────────────────────────────────────
+        # URL: /learn?isLoggingIn=true (same URL, new modal)
+        # Recorded selectors:
+        #   [data-test="full-name-input"]  ← Nama (opsional)
+        #   [data-test="email-input"]      ← Email
+        #   [data-test="password-input"]   ← Kata sandi
+        #   [data-test="register-button"]  ← BUAT AKUN
+        self.log("Filling registration form (Buat profilmu)...")
 
-        # Wait for the Email field (placeholder "Email" in all locales on this form)
-        _email_input = page.locator(
-            'input[placeholder="Email"], '
-            'input[placeholder*="Email" i], '
-            'input[type="email"], '
-            'input[autocomplete*="email" i], '
-            'input[name*="email" i]'
-        ).first
+        # Wait for the form to appear (name input is the first field)
+        _name = page.locator('[data-test="full-name-input"]')
         try:
-            _email_input.wait_for(state="visible", timeout=15000)
+            _name.wait_for(state="visible", timeout=15000)
+            _name.fill(email.split("@")[0])
+            self.log(f"Name: {email.split('@')[0]}")
         except Exception as e:
-            # Diagnostic log before failing
-            try:
-                _btns = [_b.inner_text()[:40] for _b in page.locator("button").all() if _b.is_visible()]
-                _inps = [(_i.get_attribute("placeholder") or _i.get_attribute("type") or "?")
-                         for _i in page.locator("input").all() if _i.is_visible()]
-                self.log(f"Diagnosis — URL:{page.url} | buttons:{_btns} | inputs:{_inps}")
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"Email input not found on {page.url}. "
-                f"Duolingo may have changed its registration flow. Error: {e}"
-            )
+            self.log(f"full-name-input: {e}")
 
-        # Fill Nama (opsional) if visible
-        _name_input = page.locator(
-            'input[placeholder*="Nama" i], input[placeholder*="Name" i]'
-        ).first
+        _email_field = page.locator('[data-test="email-input"]')
         try:
-            if _name_input.is_visible():
-                _name_input.fill(email.split("@")[0])
-                self.log(f"Filled name: {email.split('@')[0]}")
-        except Exception:
-            pass
+            _email_field.wait_for(state="visible", timeout=8000)
+            _email_field.fill(email)
+            self.log(f"Email: {email}")
+        except Exception as e:
+            self.log(f"email-input: {e}")
 
-        # Fill Email
-        _email_input.fill(email)
-        self.log(f"Filled email: {email}")
+        _pw_field = page.locator('[data-test="password-input"]')
+        try:
+            _pw_field.wait_for(state="visible", timeout=8000)
+            _pw_field.fill(password)
+            self.log("Password filled.")
+        except Exception as e:
+            self.log(f"password-input: {e}")
 
-        # Fill Kata sandi (Password)
-        _pass_input = page.locator(
-            'input[type="password"], '
-            'input[placeholder*="Kata sandi" i], '
-            'input[placeholder*="Password" i]'
-        ).first
-        _pass_input.fill(password)
-        self.log("Filled password.")
+        # Submit
+        self.log("Clicking BUAT AKUN (register-button)...")
+        _reg_btn = page.locator('[data-test="register-button"]')
+        _reg_btn.wait_for(state="visible", timeout=10000)
+        _reg_btn.click()
 
-        # Click BUAT AKUN (Create Account)
-        self.log("Clicking BUAT AKUN...")
-        _buat_akun = page.get_by_role("button", name=re.compile(
-            r"Buat akun|Create account|Sign up|Register|Daftar|"
-            r"Tạo tài khoản|Criar conta|Crear cuenta|注册",
-            re.I
-        )).first
-        _buat_akun.wait_for(state="visible", timeout=10000)
-        _buat_akun.click()
-
-        # ── Wait for post-registration landing ────────────────────────────
-        # After BUAT AKUN, Duolingo redirects to /learn (no isLoggingIn param)
-        self.log("Waiting for registration to complete...")
+        # ── Wait for post-registration success ────────────────────────────
+        # After BUAT AKUN: redirects to /learn (no isLoggingIn), /home, or /email-verification
+        self.log("Waiting for registration success redirect...")
         page.wait_for_url(
             re.compile(r"duolingo\.com/(learn$|learn\?(?!isLoggingIn)|home|email-verification|onboarding)"),
             timeout=45000,
         )
         final_url = page.url
-        self.log(f"Registration completed successfully! Landed on: {final_url}")
+        self.log(f"Registration SUCCESS! Landed on: {final_url}")
 
-        # Email verification (optional)
+        # Email verification (optional callback)
         if self.verification_link_callback:
-            self.log("Requesting verification link...")
+            self.log("Requesting email verification link...")
             confirm_url = self.verification_link_callback()
-            self.log(f"Navigating to verification link: {confirm_url}")
+            self.log(f"Navigating to: {confirm_url}")
             confirm_page = context.new_page()
             _block_heavy_resources(confirm_page)
             confirm_page.goto(confirm_url, wait_until="domcontentloaded", timeout=60000)
@@ -429,149 +409,3 @@ class DuolingoBrowserRegister:
             "cookies": cookies,
             "localStorage": local_storage,
         }
-
-    def _click_through_onboarding(self, page: Page):
-        """
-        Click through the Duolingo onboarding wizard until we reach /learn.
-
-        Confirmed screens (Phase 1 + Phase 2 screenshots):
-          - /register  : "I want to learn" language grid → click card → (no continue needed, auto-advances)
-          - /register  : "What language do you speak?" list → click li item
-          - /welcome   : Duo mascot animations → click LANJUTKAN (multiple times)
-          - /welcome?welcomeStep=hdyhau : "Dari mana kamu tahu?" option grid
-                         → click any option → click LANJUTKAN
-          - /learn     : level modal appears → EXIT LOOP (Phase 2 handles it)
-        """
-        self.log("Handling onboarding questionnaires...")
-        prev_url = page.url
-        stall_steps = 0
-
-        for step in range(40):
-            try:
-                current_url = page.url
-
-                # ── Exit when we reach the main app ──────────────────────────
-                # /learn is the Duolingo main page — onboarding is complete.
-                # The level-selection modal on /learn is handled by _do_register.
-                if "/learn" in current_url:
-                    self.log(f"Step {step}: Reached /learn — onboarding complete.")
-                    break
-
-                # Also exit if email input is already visible (rare fast-track)
-                if page.locator('input[type="email"]').count() > 0:
-                    self.log("Email input visible — exiting onboarding loop.")
-                    break
-
-                # Log URL changes for debugging
-                if current_url != prev_url:
-                    self.log(f"Step {step}: → {current_url}")
-                    prev_url = current_url
-                    stall_steps = 0
-                    page.wait_for_timeout(2000)  # let React settle after navigation
-
-                # ── Select an option card or list item ────────────────────────
-                # Covers: language grid cards, native language list, "where did
-                # you hear" option buttons, level-selection list items.
-                clicked_option = False
-                for sel in [
-                    'button[role="radio"]',
-                    '[data-test*="-card"]:not([data-test*="register"])',
-                    '[data-test*="card"]:not([data-test*="register"])',
-                    'ul li a',         # native language list: <ul><li><a>
-                    'ul li button',    # some option lists: <ul><li><button>
-                    '[aria-checked="false"]',
-                ]:
-                    for opt in page.locator(sel).all():
-                        try:
-                            if opt.is_visible() and opt.is_enabled():
-                                self.log(f"Step {step}: Clicking option ({sel})...")
-                                opt.click(timeout=4000)
-                                page.wait_for_timeout(600)
-                                clicked_option = True
-                                break
-                        except Exception:
-                            continue
-                    if clicked_option:
-                        break
-
-                if clicked_option:
-                    page.wait_for_timeout(400)
-
-                # ── Find and click Continue / LANJUTKAN ───────────────────────
-                clicked_continue = False
-
-                # Priority 1: data-test attributes
-                for dt in ["register-button", "onboarding-next", "continue-button",
-                           "next-button", "submit-button"]:
-                    loc = page.locator(f'[data-test="{dt}"]')
-                    if loc.count() > 0:
-                        try:
-                            loc.first.wait_for(state="visible", timeout=1500)
-                            for _ in range(6):
-                                if loc.first.is_enabled():
-                                    break
-                                page.wait_for_timeout(500)
-                            if loc.first.is_enabled():
-                                self.log(f"Step {step}: Clicking [data-test={dt}]...")
-                                loc.first.click(timeout=5000)
-                                page.wait_for_timeout(1400)
-                                clicked_continue = True
-                                stall_steps = 0
-                                break
-                        except Exception:
-                            pass
-
-                # Priority 2: role=button with known labels
-                # LANJUTKAN = Indonesian "Continue" (confirmed in Phase 1 screenshots)
-                if not clicked_continue:
-                    btn = page.get_by_role("button", name=re.compile(
-                        r"Continue|Next|Confirm|OK|Done|Submit|Got it|Start|"
-                        r"Lanjutkan|Lanjut|Mulai|Bắt đầu|Tiếp tục|"
-                        r"继续|下一步|开始|完成|确认|"
-                        r"Continuar|Confirmar|Empezar|Começar",
-                        re.I
-                    )).first
-                    try:
-                        if btn.is_visible():
-                            for _ in range(6):
-                                if btn.is_enabled():
-                                    break
-                                page.wait_for_timeout(500)
-                            if btn.is_enabled():
-                                self.log(f"Step {step}: Clicking Continue (by role)...")
-                                btn.click(timeout=5000)
-                                page.wait_for_timeout(1400)
-                                clicked_continue = True
-                                stall_steps = 0
-                    except Exception:
-                        pass
-
-                # Priority 3: any visible enabled button with text > 3 chars
-                if not clicked_continue:
-                    _skip_labels = {"", "x", "close", "skip", "×", "✕", "masuk", "log in"}
-                    for b in page.locator("button").all():
-                        try:
-                            if b.is_visible() and b.is_enabled():
-                                label = (b.inner_text() or "").strip()
-                                if label and label.lower() not in _skip_labels and len(label) > 3:
-                                    self.log(f"Step {step}: Fallback click: '{label}'")
-                                    b.click(timeout=5000)
-                                    page.wait_for_timeout(1400)
-                                    clicked_continue = True
-                                    stall_steps = 0
-                                    break
-                        except Exception:
-                            continue
-
-                # ── Stall detection ───────────────────────────────────────────
-                if not clicked_option and not clicked_continue:
-                    stall_steps += 1
-                    self.log(f"Step {step}: Nothing to click (stall #{stall_steps})")
-                    if stall_steps >= 5:
-                        self.log("Onboarding stalled — exiting loop early")
-                        break
-                    page.wait_for_timeout(1200)
-
-            except Exception as e:
-                self.log(f"Onboarding step {step} error: {e}")
-                page.wait_for_timeout(1000)
