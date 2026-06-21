@@ -25,6 +25,17 @@ _LAUNCH_ARGS = [
     "--disable-prompt-on-repost",
     "--metrics-recording-only",
     "--mute-audio",
+    # ── Animation / WebGL suppression ──────────────────────────────────────
+    # Duolingo uses Lottie + WebGL canvas animations (Duo mascot) between each
+    # sign-up step. These overwhelm the headless renderer and cause crashes.
+    "--disable-webgl",                      # kill WebGL context (Lottie fallback)
+    "--disable-webgl2",                     # kill WebGL2
+    "--disable-3d-apis",                    # no 3D canvas at all
+    "--disable-gpu-compositing",            # software compositing only
+    "--disable-accelerated-2d-canvas",      # software 2D canvas
+    "--disable-canvas-aa",                  # no canvas anti-aliasing
+    "--renderer-process-limit=1",           # single renderer process
+    "--disable-features=VizDisplayCompositor,IsolateOrigins",
 ]
 
 # ---------------------------------------------------------------------------
@@ -56,6 +67,54 @@ def _block_heavy_resources(page: Page) -> None:
             return
         route.continue_()
     page.route("**/*", _handler)
+
+
+_ANIMATION_KILL_SCRIPT = """
+// Throttle requestAnimationFrame to ~5 fps — stops Lottie/canvas loops from
+// consuming CPU and crashing the renderer between sign-up modal transitions.
+(function() {
+    var _raf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = function(cb) {
+        return setTimeout(function() { cb(performance.now()); }, 200);
+    };
+    window.cancelAnimationFrame = clearTimeout;
+
+    // Null out WebGL so Lottie cannot use GPU canvas
+    var _getCtx = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type) {
+        if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
+            return null;
+        }
+        return _getCtx.apply(this, arguments);
+    };
+})();
+"""
+
+_ANIMATION_KILL_CSS = """
+*, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+}
+canvas { display: none !important; }
+"""
+
+
+def _setup_page_stability(page: Page) -> None:
+    """
+    Inject scripts and styles that suppress Duolingo's Lottie/WebGL animations.
+    Must be called before any navigation so the init script runs on every page load.
+    """
+    page.add_init_script(_ANIMATION_KILL_SCRIPT)
+    # Also inject CSS on every navigation (covers SPA route changes)
+    page.on("domcontentloaded", lambda _: _inject_css_safe(page))
+
+
+def _inject_css_safe(page: Page) -> None:
+    try:
+        page.add_style_tag(content=_ANIMATION_KILL_CSS)
+    except Exception:
+        pass  # page may be navigating; non-fatal
 
 
 class DuolingoBrowserRegister:
@@ -114,6 +173,7 @@ class DuolingoBrowserRegister:
                     )
                     page = context.new_page()
                     _block_heavy_resources(page)
+                    _setup_page_stability(page)   # kill Lottie/WebGL animations
 
                     try:
                         return self._do_register(page, context, email, password, referral_code)
@@ -167,6 +227,7 @@ class DuolingoBrowserRegister:
 
             page = context.new_page()
             _block_heavy_resources(page)
+            _setup_page_stability(page)
 
             try:
                 result = self._do_redeem(page, context, email, password, referral_code)
