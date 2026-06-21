@@ -10,6 +10,7 @@ from typing import Optional
 
 from curl_cffi import requests as cffi_requests
 
+from core.base_platform import Account
 # from ..database.models import Account  # removed: external dep
 
 logger = logging.getLogger(__name__)
