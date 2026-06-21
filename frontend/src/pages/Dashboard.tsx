@@ -25,18 +25,18 @@ const STATUS_VARIANT: Record<string, any> = {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  registered: '已注册',
-  trial: '试用',
-  subscribed: '订阅',
-  expired: '过期',
-  invalid: '失效',
-  free: '空闲',
-  eligible: '可用',
-  unknown: '未知',
-  valid: '有效',
-  active: '活跃',
-  inactive: '未激活',
-  pending: '待处理',
+  registered: 'Registered',
+  trial: 'Trial',
+  subscribed: 'Subscribed',
+  expired: 'Expired',
+  invalid: 'Invalid',
+  free: 'Free',
+  eligible: 'Eligible',
+  unknown: 'Unknown',
+  valid: 'Valid',
+  active: 'Active',
+  inactive: 'Inactive',
+  pending: 'Pending',
 }
 
 export default function Dashboard() {
@@ -70,15 +70,15 @@ export default function Dashboard() {
   useEffect(() => { load() }, [])
 
   const statCards = [
-    { label: '总账号数', value: stats?.total ?? '-', icon: Users, color: 'text-[var(--text-accent)]' },
-    { label: '试用中', value: stats?.by_plan_state?.trial ?? 0, icon: Clock, color: 'text-amber-400' },
-    { label: '已订阅', value: stats?.by_plan_state?.subscribed ?? 0, icon: CheckCircle, color: 'text-emerald-400' },
-    { label: '已失效', value: (stats?.by_display_status?.expired ?? 0) + (stats?.by_validity_status?.invalid ?? 0), icon: XCircle, color: 'text-red-400' },
+    { label: 'Total Accounts', value: stats?.total ?? '-', icon: Users, color: 'text-[var(--text-accent)]' },
+    { label: 'Trial', value: stats?.by_plan_state?.trial ?? 0, icon: Clock, color: 'text-amber-400' },
+    { label: 'Subscribed', value: stats?.by_plan_state?.subscribed ?? 0, icon: CheckCircle, color: 'text-emerald-400' },
+    { label: 'Expired/Invalid', value: (stats?.by_display_status?.expired ?? 0) + (stats?.by_validity_status?.invalid ?? 0), icon: XCircle, color: 'text-red-400' },
   ]
   const platformEntries = Object.entries(stats?.by_platform || {})
   const totalCount = Math.max(Number(stats?.total || 0), 0)
 
-  const renderStatusGroup = (title: string, values: Record<string, number> | undefined, emptyCopy = '暂无数据') => (
+  const renderStatusGroup = (title: string, values: Record<string, number> | undefined, emptyCopy = 'No data') => (
     <div className="space-y-2">
       <div className="px-1 text-sm font-medium text-[var(--text-primary)]">{title}</div>
       {values && Object.keys(values).length > 0 ? Object.entries(values).map(([status, count]) => (
@@ -113,10 +113,10 @@ export default function Dashboard() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.55fr)]">
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
-            <CardTitle>平台分布</CardTitle>
+            <CardTitle>Platform Distribution</CardTitle>
             <Button variant="outline" size="sm" onClick={load} disabled={loading}>
               <RefreshCw className={`mr-1 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              刷新
+              Refresh
             </Button>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -137,23 +137,23 @@ export default function Dashboard() {
                 </div>
               )
             }) : (
-              <div className="empty-state-panel">{stats ? '暂无平台分布数据' : '正在加载统计数据...'}</div>
+              <div className="empty-state-panel">{stats ? 'No platform data' : 'Loading stats...'}</div>
             )}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>桌面应用状态</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Desktop App Status</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             {desktopPlatforms.map((platform) => {
               const state = desktopStates[platform]
               const label = state?.app_name || state?.display_name || platform
               const badges = state
                 ? [
-                    { label: state.installed ? '已安装' : '未安装', variant: state.installed ? 'success' : 'secondary' },
-                    { label: state.configured ? '已配置' : '未配置', variant: state.configured ? 'success' : 'warning' },
-                    { label: state.running ? '已打开' : '未打开', variant: state.running ? 'success' : 'secondary' },
-                    { label: state.ready ? '已就绪' : '未就绪', variant: state.ready ? 'success' : 'warning' },
+                    { label: state.installed ? 'Installed' : 'Not installed', variant: state.installed ? 'success' : 'secondary' },
+                    { label: state.configured ? 'Configured' : 'Not configured', variant: state.configured ? 'success' : 'warning' },
+                    { label: state.running ? 'Running' : 'Not running', variant: state.running ? 'success' : 'secondary' },
+                    { label: state.ready ? 'Ready' : 'Not ready', variant: state.ready ? 'success' : 'warning' },
                   ]
                 : []
               return (
@@ -163,19 +163,19 @@ export default function Dashboard() {
                       <div className="text-sm font-semibold text-[var(--text-primary)]">{label}</div>
                       <div className="mt-1 text-xs leading-5 text-[var(--text-muted)]">
                         {state?.available === false
-                          ? (state?.message || '当前平台暂未接入桌面状态探测')
-                          : (state?.ready_label || state?.status_label || '桌面账号切换与本地就绪状态')}
+                          ? (state?.message || 'Desktop status detection not available for this platform')
+                          : (state?.ready_label || state?.status_label || 'Desktop account switching and local readiness')}
                       </div>
                     </div>
                     <Badge variant={state?.ready ? 'success' : 'secondary'}>
-                      {state?.ready ? '就绪' : '待命'}
+                      {state?.ready ? 'Ready' : 'Standby'}
                     </Badge>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {badges.length > 0 ? badges.map((badge) => (
                       <Badge key={`${platform}-${badge.label}`} variant={badge.variant as any}>{badge.label}</Badge>
                     )) : (
-                      <span className="text-xs text-[var(--text-muted)]">加载中...</span>
+                      <span className="text-xs text-[var(--text-muted)]">Loading...</span>
                     )}
                   </div>
                 </div>
@@ -186,11 +186,11 @@ export default function Dashboard() {
       </div>
 
       <Card>
-        <CardHeader><CardTitle>状态分布</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Status Distribution</CardTitle></CardHeader>
         <CardContent className="grid gap-4 xl:grid-cols-3">
-          {renderStatusGroup('套餐', stats?.by_plan_state, '暂无套餐分布数据')}
-          {renderStatusGroup('生命周期', stats?.by_lifecycle_status, '暂无生命周期分布数据')}
-          {renderStatusGroup('有效性', stats?.by_validity_status, '暂无有效性分布数据')}
+          {renderStatusGroup('Plan', stats?.by_plan_state, 'No plan data')}
+          {renderStatusGroup('Lifecycle', stats?.by_lifecycle_status, 'No lifecycle data')}
+          {renderStatusGroup('Validity', stats?.by_validity_status, 'No validity data')}
         </CardContent>
       </Card>
     </div>
