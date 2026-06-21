@@ -274,14 +274,42 @@ class DuolingoBrowserRegister:
         self.log("Clicking BUAT AKUN (register-button)...")
         _reg_btn = page.locator('[data-test="register-button"]')
         _reg_btn.wait_for(state="visible", timeout=10000)
-        _reg_btn.click()
 
-        # ── Wait for post-registration redirect ───────────────────────────
-        self.log("Waiting for registration success redirect...")
-        page.wait_for_url(
-            re.compile(r"duolingo\.com/(learn|home|email-verification|onboarding)"),
-            timeout=60000,
-        )
+        # Use expect_navigation with domcontentloaded to avoid the renderer
+        # crashing during the heavy /learn page 'load' event.
+        # The default 'load' waits for ALL resources (images, scripts) which
+        # overwhelms the renderer when running headless with limited memory.
+        self.log("Waiting for post-registration redirect (domcontentloaded)...")
+        try:
+            with page.expect_navigation(
+                url=re.compile(r"duolingo\.com/(learn|home|email-verification|onboarding)"),
+                wait_until="domcontentloaded",
+                timeout=60000,
+            ):
+                _reg_btn.click()
+        except Exception as _nav_err:
+            _nav_err_s = str(_nav_err).lower()
+            if "crashed" in _nav_err_s or "page crash" in _nav_err_s:
+                raise  # let the outer retry loop handle it
+            # Non-crash navigation exception — might be a timing mismatch.
+            # Fall back to a simple URL poll to confirm success.
+            self.log(f"Navigation wait failed ({_nav_err}) — polling URL...")
+            import time as _time
+            _deadline = _time.time() + 30
+            while _time.time() < _deadline:
+                try:
+                    _cur = page.url
+                    if re.search(r"duolingo\.com/(learn|home|email-verification|onboarding)", _cur):
+                        break
+                except Exception:
+                    pass
+                page.wait_for_timeout(1000)
+            else:
+                raise RuntimeError(
+                    f"Registration did not navigate to expected URL. "
+                    f"Current: {page.url}. Original error: {_nav_err}"
+                )
+
         final_url = page.url
         self.log(f"Registration SUCCESS! Landed on: {final_url}")
 
