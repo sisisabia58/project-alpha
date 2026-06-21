@@ -47,12 +47,17 @@ class DuolingoBrowserRegister:
                 
                 # Check if we are already logged in or if there is a "Get started" button
                 self.log("Clicking 'Get started'...")
-                get_started = page.locator('[data-test="get-started"]').first
-                if not get_started.count() or not get_started.is_visible():
+                # FIX Bug#1: call count() on the raw locator, not on .first
+                # (.first always returns count==1 even when the element is absent)
+                _gs_loc = page.locator('[data-test="get-started"]')
+                if _gs_loc.count() > 0 and _gs_loc.first.is_visible():
+                    get_started = _gs_loc.first
+                else:
                     get_started = page.get_by_role("button", name=re.compile(
-                        "Get started|开始|开始学习|Bắt đầu|Mulai|Empezar|Começar", 
+                        "Get started|开始|开始学习|Bắt đầu|Mulai|Empezar|Começar",
                         re.I
                     )).first
+                get_started.wait_for(state="visible", timeout=15000)
                 get_started.click(timeout=10000)
                 page.wait_for_timeout(2000)
                 
@@ -61,9 +66,22 @@ class DuolingoBrowserRegister:
                 
                 # Fill registration details
                 self.log("Filling profile registration form...")
-                age_input = page.locator('input[placeholder*="Age" i], input[placeholder*="Tuổi" i], input[placeholder*="Edad" i], input[placeholder*="Umur" i], input[placeholder*="Idade" i], input[placeholder*="年龄" i], input[type="number"]').first
-                age_input.wait_for(state="visible", timeout=15000)
-                age_input.fill(str(random.randint(22, 45)))
+                # FIX Bug#3: Duolingo now uses a birthday date-picker in many variants.
+                # Expand selectors to cover date inputs and data-test attributes.
+                _age_selector = (
+                    'input[data-test*="age" i], '
+                    'input[placeholder*="Age" i], input[placeholder*="Birthday" i], '
+                    'input[placeholder*="Tuổi" i], input[placeholder*="Edad" i], '
+                    'input[placeholder*="Umur" i], input[placeholder*="Idade" i], input[placeholder*="年龄" i], '
+                    'input[type="date"], input[type="number"][min="1"], input[type="number"]'
+                )
+                age_input = page.locator(_age_selector).first
+                try:
+                    age_input.wait_for(state="visible", timeout=15000)
+                    age_input.fill(str(random.randint(22, 45)))
+                except Exception:
+                    # Some A/B variants omit the age/birthday field entirely — skip gracefully
+                    self.log("No age/birthday input found — skipping (form variant without age field)")
                 
                 name_input = page.locator('input[placeholder*="Name" i], input[placeholder*="姓名" i], input[placeholder*="Tên" i], input[placeholder*="Nombre" i], input[placeholder*="Nome" i], input[placeholder*="Nama" i]').first
                 if name_input.count() and name_input.is_visible():
@@ -74,17 +92,27 @@ class DuolingoBrowserRegister:
                 
                 # Submit form
                 self.log("Submitting registration profile...")
-                submit_btn = page.locator('[data-test="register-button"]').first
-                if not submit_btn.count() or not submit_btn.is_visible():
+                # FIX Bug#4: same count() guard fix as Bug#1 — use raw locator for count check
+                _sb_loc = page.locator('[data-test="register-button"]')
+                if _sb_loc.count() > 0 and _sb_loc.first.is_visible():
+                    submit_btn = _sb_loc.first
+                else:
                     submit_btn = page.get_by_role("button", name=re.compile(
-                        "Create profile|Create account|创建账号|确认|完成|Tạo hồ sơ|Tạo tài khoản|Buat profil|Buat akun|Crear perfil|Crear cuenta|Criar perfil|Criar conta", 
+                        "Create profile|Create account|创建账号|确认|完成|Tạo hồ sơ|Tạo tài khoản|Buat profil|Buat akun|Crear perfil|Crear cuenta|Criar perfil|Criar conta",
                         re.I
                     )).first
+                submit_btn.wait_for(state="visible", timeout=10000)
                 submit_btn.click()
                 
                 # Wait for successful navigation to main page
-                page.wait_for_url(re.compile(r"/learn"), timeout=45000)
-                self.log("Registration completed successfully! Navigated to /learn.")
+                # FIX Bug#5: Duolingo may redirect to /home, /email-verification or /onboarding
+                # instead of /learn — broaden pattern to accept all valid post-registration URLs
+                page.wait_for_url(
+                    re.compile(r"/(learn|home|email-verification|onboarding)"),
+                    timeout=45000,
+                )
+                final_url = page.url
+                self.log(f"Registration completed successfully! Landed on: {final_url}")
 
                 # Wait for email verification if requested
                 if self.verification_link_callback:
@@ -191,28 +219,38 @@ class DuolingoBrowserRegister:
 
     def _click_through_onboarding(self, page: Page):
         self.log("Handling onboarding questionnaires...")
-        for step in range(15):
+        # FIX Bug#2: raised from 15 → 25 to cover longer A/B onboarding variants
+        for step in range(25):
             try:
-                # Check if we are on the final sign-up modal already
+                # Exit early when sign-up form is visible
                 if page.locator('input[type="email"]').count() > 0:
                     self.log("Sign-up form visible. Exiting onboarding loop.")
                     break
-                
-                # Check for options/selection lists and click the first option to select
-                options = page.locator('button[role="radio"], ul li button, [data-test*="-card"], [data-test*="card"]').all()
+
+                # Click the first selectable option card if any are present
+                options = page.locator(
+                    'button[role="radio"], ul li button, [data-test*="-card"], [data-test*="card"]'
+                ).all()
                 if len(options) > 0:
                     self.log(f"Step {step}: Clicking option card...")
                     options[0].click(timeout=3000, force=True)
                     page.wait_for_timeout(800)
-                
-                # Click Continue/Next
-                btn = page.locator('[data-test="register-button"]').first
-                if not btn.count() or not btn.is_visible() or not btn.is_enabled():
+
+                # FIX Bug#2: call count() on the raw locator, not on .first
+                # Previously, btn.count() on a .first locator always returned 1,
+                # so the fallback get_by_role was never reached and
+                # the else-branch wasted 1 s per step doing nothing.
+                _btn_loc = page.locator('[data-test="register-button"]')
+                if _btn_loc.count() > 0 and _btn_loc.first.is_visible() and _btn_loc.first.is_enabled():
+                    btn = _btn_loc.first
+                else:
                     btn = page.get_by_role("button", name=re.compile(
-                        "Continue|Next|Confirm|Get started|继续|下一步|开始|Tiếp tục|Lanjut|Continuar|Confirmar|Bắt đầu|Mulai|Empezar|Começar", 
+                        "Continue|Next|Confirm|Get started|继续|下一步|开始|Tiếp tục|Lanjut|Continuar|Confirmar|Bắt đầu|Mulai|Empezar|Começar",
                         re.I
                     )).first
-                if btn.count() and btn.is_visible() and btn.is_enabled():
+
+                # After resolving btn, .first always has count==1, so only check visibility/enabled
+                if btn.is_visible() and btn.is_enabled():
                     self.log(f"Step {step}: Clicking Continue/Next button...")
                     btn.click(timeout=5000, force=True)
                     page.wait_for_timeout(1500)
