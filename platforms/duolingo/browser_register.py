@@ -342,39 +342,125 @@ class DuolingoBrowserRegister:
 
     def _click_through_onboarding(self, page: Page):
         self.log("Handling onboarding questionnaires...")
-        for step in range(25):
+        prev_url = page.url
+        stall_steps = 0
+
+        for step in range(30):
             try:
-                # Exit early when sign-up form is visible
+                current_url = page.url
+
+                # ── Exit: sign-up form reached ────────────────────────────────
                 if page.locator('input[type="email"]').count() > 0:
                     self.log("Sign-up form visible. Exiting onboarding loop.")
                     break
 
-                # Click the first selectable option card if any are present
-                options = page.locator(
-                    'button[role="radio"], ul li button, [data-test*="-card"], [data-test*="card"]'
-                ).all()
-                if len(options) > 0:
-                    self.log(f"Step {step}: Clicking option card...")
-                    options[0].click(timeout=3000, force=True)
-                    page.wait_for_timeout(800)
+                # Log URL transitions so we know where we are
+                if current_url != prev_url:
+                    self.log(f"Step {step}: Navigated to {current_url}")
+                    prev_url = current_url
+                    stall_steps = 0
 
-                # Resolve the Continue / Next button
-                _btn_loc = page.locator('[data-test="register-button"]')
-                if _btn_loc.count() > 0 and _btn_loc.first.is_visible() and _btn_loc.first.is_enabled():
-                    btn = _btn_loc.first
-                else:
+                # ── Select an option card ─────────────────────────────────────
+                # Do NOT use force=True — bypasses React synthetic event
+                # handlers; card appears selected but state never updates.
+                clicked_option = False
+                for sel in [
+                    'button[role="radio"]',
+                    '[data-test*="-card"]:not([data-test*="register"])',
+                    '[data-test*="card"]:not([data-test*="register"])',
+                    'ul li button',
+                    '[aria-checked="false"]',
+                ]:
+                    for opt in page.locator(sel).all():
+                        try:
+                            if opt.is_visible() and opt.is_enabled():
+                                self.log(f"Step {step}: Clicking option ({sel})...")
+                                opt.click(timeout=4000)
+                                page.wait_for_timeout(600)
+                                clicked_option = True
+                                break
+                        except Exception:
+                            continue
+                    if clicked_option:
+                        break
+
+                if clicked_option:
+                    page.wait_for_timeout(400)  # brief settle after React state update
+
+                # ── Find and click Continue / Next ────────────────────────────
+                clicked_continue = False
+
+                # Priority 1: known data-test attributes
+                for dt in ["register-button", "onboarding-next", "continue-button", "next-button", "submit-button"]:
+                    loc = page.locator(f'[data-test="{dt}"]')
+                    if loc.count() > 0:
+                        try:
+                            loc.first.wait_for(state="visible", timeout=1500)
+                            # Poll up to 3s for button to become enabled after card selection
+                            for _ in range(6):
+                                if loc.first.is_enabled():
+                                    break
+                                page.wait_for_timeout(500)
+                            if loc.first.is_enabled():
+                                self.log(f"Step {step}: Clicking [data-test={dt}]...")
+                                loc.first.click(timeout=5000)
+                                page.wait_for_timeout(1400)
+                                clicked_continue = True
+                                stall_steps = 0
+                                break
+                        except Exception:
+                            pass
+
+                # Priority 2: role=button with known labels
+                if not clicked_continue:
                     btn = page.get_by_role("button", name=re.compile(
-                        "Continue|Next|Confirm|Get started|继续|下一步|开始|Tiếp tục|Lanjut|"
-                        "Continuar|Confirmar|Bắt đầu|Mulai|Empezar|Começar",
+                        r"Continue|Next|Confirm|OK|Done|Submit|Got it|Start|"
+                        r"继续|下一步|开始|完成|确认|"
+                        r"Tiếp tục|Lanjut|Mulai|Bắt đầu|"
+                        r"Continuar|Confirmar|Empezar|Começar",
                         re.I
                     )).first
+                    try:
+                        if btn.is_visible():
+                            for _ in range(6):
+                                if btn.is_enabled():
+                                    break
+                                page.wait_for_timeout(500)
+                            if btn.is_enabled():
+                                self.log(f"Step {step}: Clicking Continue (by role)...")
+                                btn.click(timeout=5000)
+                                page.wait_for_timeout(1400)
+                                clicked_continue = True
+                                stall_steps = 0
+                    except Exception:
+                        pass
 
-                if btn.is_visible() and btn.is_enabled():
-                    self.log(f"Step {step}: Clicking Continue/Next button...")
-                    btn.click(timeout=5000, force=True)
-                    page.wait_for_timeout(1500)
-                else:
-                    page.wait_for_timeout(1000)
+                # Priority 3: any visible enabled button longer than 3 chars (last resort)
+                if not clicked_continue:
+                    for b in page.locator("button").all():
+                        try:
+                            if b.is_visible() and b.is_enabled():
+                                label = (b.inner_text() or "").strip()
+                                skip = {"", "x", "close", "skip", "×", "✕"}
+                                if label and label.lower() not in skip and len(label) > 3:
+                                    self.log(f"Step {step}: Fallback click: '{label}'")
+                                    b.click(timeout=5000)
+                                    page.wait_for_timeout(1400)
+                                    clicked_continue = True
+                                    stall_steps = 0
+                                    break
+                        except Exception:
+                            continue
+
+                # ── Stall detection ───────────────────────────────────────────
+                if not clicked_option and not clicked_continue:
+                    stall_steps += 1
+                    self.log(f"Step {step}: Nothing to click (stall #{stall_steps})")
+                    if stall_steps >= 5:
+                        self.log("Onboarding stalled — exiting loop early")
+                        break
+                    page.wait_for_timeout(1200)
+
             except Exception as e:
-                self.log(f"Onboarding step {step} warning/waiting: {e}")
+                self.log(f"Onboarding step {step} error: {e}")
                 page.wait_for_timeout(1000)
