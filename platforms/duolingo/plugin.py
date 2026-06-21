@@ -36,7 +36,14 @@ class DuolingoPlatform(BasePlatform):
     def _prepare_registration_password(self, password: str | None) -> str:
         if password:
             return password
-        return "".join(random.choices(string.ascii_letters + string.digits + "!@#$%", k=15))
+        # Duolingo requires: ≥8 chars, at least 1 uppercase, 1 number or symbol
+        upper = random.choice(string.ascii_uppercase)
+        digits = random.choices(string.digits, k=2)
+        symbols = random.choices("!@#$%", k=1)
+        rest = random.choices(string.ascii_letters + string.digits, k=9)
+        chars = [upper] + digits + symbols + rest
+        random.shuffle(chars)
+        return "".join(chars)
 
     def _map_duolingo_result(self, result: dict) -> RegistrationResult:
         status_val = result.get("status", "registered")
@@ -70,6 +77,7 @@ class DuolingoPlatform(BasePlatform):
             browser_register_runner=lambda worker, ctx, artifacts: worker.register(
                 email=ctx.identity.email,
                 password=ctx.password,
+                referral_code=getattr(ctx, "referral_code", None),
             ),
             link_spec=LinkSpec(
                 keyword="duolingo",
