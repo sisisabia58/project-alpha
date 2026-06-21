@@ -47,7 +47,7 @@ def create_provider_setting(body: ProviderSettingUpsertRequest):
 def delete_provider_setting(setting_id: int):
     result = service.delete_setting(setting_id)
     if not result["ok"]:
-        raise HTTPException(404, "provider setting 不存在")
+        raise HTTPException(404, "provider setting does not exist")
     return result
 
 
@@ -66,7 +66,7 @@ def test_provider(body: ProviderTestRequest):
     definitions = ProviderDefinitionsRepository()
     definition = definitions.get_by_key(body.provider_type, body.provider_key)
     if not definition:
-        return {"ok": False, "error": f"未找到 provider 定义: {body.provider_key}"}
+        return {"ok": False, "error": f"Provider definition not found: {body.provider_key}"}
 
     # Merge config + auth into a flat dict (same as runtime)
     extra = {**body.config, **body.auth}
@@ -74,11 +74,11 @@ def test_provider(body: ProviderTestRequest):
     if body.provider_type == "mailbox":
         return _test_mailbox(definition.driver_type or body.provider_key, extra, definition)
     elif body.provider_type == "captcha":
-        return {"ok": True, "message": "验证码服务暂不支持在线测试，请在注册任务中验证"}
+        return {"ok": True, "message": "Captcha service does not support online testing yet; please verify in a registration task"}
     elif body.provider_type == "sms":
-        return {"ok": True, "message": "接码服务暂不支持在线测试，请在注册任务中验证"}
+        return {"ok": True, "message": "SMS service does not support online testing yet; please verify in a registration task"}
     else:
-        return {"ok": False, "error": f"不支持测试的 provider 类型: {body.provider_type}"}
+        return {"ok": False, "error": f"Unsupported testing provider type: {body.provider_type}"}
 
 
 def _test_mailbox(driver_type: str, extra: dict, definition) -> dict:
@@ -88,7 +88,7 @@ def _test_mailbox(driver_type: str, extra: dict, definition) -> dict:
 
     factory = MAILBOX_FACTORY_REGISTRY.get(driver_type)
     if not factory:
-        return {"ok": False, "error": f"未找到邮箱驱动: {driver_type}"}
+        return {"ok": False, "error": f"Mailbox driver not found: {driver_type}"}
 
     try:
         if driver_type in ("generic_http_mailbox", "generic_http"):
@@ -101,19 +101,19 @@ def _test_mailbox(driver_type: str, extra: dict, definition) -> dict:
             email = mailbox.peek_email()
             return {
                 "ok": True,
-                "message": f"测试成功！可用邮箱: {email}",
+                "message": f"Test succeeded! Available email: {email}",
                 "email": email,
             }
 
         account = mailbox.get_email()
         return {
             "ok": True,
-            "message": f"测试成功！生成邮箱: {account.email}",
+            "message": f"Test succeeded! Generated email: {account.email}",
             "email": account.email,
         }
     except Exception as exc:
         return {
             "ok": False,
-            "error": f"测试失败: {str(exc)}",
+            "error": f"Test failed: {str(exc)}",
             "detail": traceback.format_exc()[-500:],
         }

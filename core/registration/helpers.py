@@ -35,7 +35,7 @@ def ensure_oauth_executor_allowed(ctx: RegistrationContext, allowed_executor_typ
         return
     if ctx.executor_type not in allowed_executor_types:
         expected = ", ".join(allowed_executor_types)
-        raise RegistrationUnsupportedError(message or f"{ctx.platform_display_name} 当前 OAuth 仅支持 executor_type={expected}")
+        raise RegistrationUnsupportedError(message or f"{ctx.platform_display_name} current OAuth only supports executor_type={expected}")
 
 
 def ensure_oauth_browser_reuse(ctx: RegistrationContext, message: str) -> None:
@@ -49,8 +49,8 @@ def build_otp_callback(
     keyword: str = "",
     timeout: int | None = None,
     code_pattern: str | None = None,
-    wait_message: str = "等待验证码...",
-    success_label: str = "验证码",
+    wait_message: str = "Waiting for verification code...",
+    success_label: str = "Verification code",
 ):
     mailbox = getattr(ctx.platform, "mailbox", None)
     mail_acct = getattr(ctx.identity, "mailbox_account", None)
@@ -95,7 +95,7 @@ def build_phone_callbacks(ctx: RegistrationContext, *, service: str | None = Non
             provider_key = "sms_activate"
             source = "legacy sms_activate_api_key"
     if not provider_key:
-        ctx.log("[SMS] 未配置 SMS provider（任务参数/全局默认/历史兼容字段都为空），phone_callback=None — 注册到 add_phone 步骤将抛错")
+        ctx.log("[SMS] SMS provider not configured (task params / global default / legacy fields are all empty), phone_callback=None — registration will fail at add_phone step")
         return None, None
 
     definition = definitions_repo.get_by_key("sms", provider_key)
@@ -109,7 +109,7 @@ def build_phone_callbacks(ctx: RegistrationContext, *, service: str | None = Non
             if str(field.get("category") or "").strip() == "auth"
         ]
     if auth_fields and not any(str(merged.get(field_key, "")).strip() for field_key in auth_fields):
-        ctx.log(f"[SMS] provider={provider_key} (来源={source}) 已找到 definition，但认证字段 {auth_fields} 全部为空，phone_callback=None")
+        ctx.log(f"[SMS] provider={provider_key} (source={source}) definition found, but authentication fields {auth_fields} are all empty, phone_callback=None")
         return None, None
 
     if ctx.proxy and not str(merged.get("sms_proxy") or merged.get("proxy") or "").strip():
@@ -137,7 +137,7 @@ def build_phone_callbacks(ctx: RegistrationContext, *, service: str | None = Non
         or service
         or ctx.platform_name
     ).strip() or ctx.platform_name
-    ctx.log(f"[SMS] phone_callback 已就绪: provider={provider_key} 来源={source} service={sms_service} country={country or 'default'}")
+    ctx.log(f"[SMS] phone_callback ready: provider={provider_key} source={source} service={sms_service} country={country or 'default'}")
     return create_phone_callbacks(
         provider_key,
         merged,
@@ -152,8 +152,8 @@ def build_link_callback(
     *,
     keyword: str = "",
     timeout: int | None = None,
-    wait_message: str = "等待验证链接邮件...",
-    success_label: str = "验证链接",
+    wait_message: str = "Waiting for verification link email...",
+    success_label: str = "Verification link",
     preview_chars: int = 80,
 ):
     mailbox = getattr(ctx.platform, "mailbox", None)

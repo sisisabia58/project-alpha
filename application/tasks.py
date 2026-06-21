@@ -194,7 +194,7 @@ def create_task(
         session.add(task)
         session.commit()
         session.refresh(task)
-    append_task_event(task.id, f"任务已创建: {task_type}", event_type="state")
+    append_task_event(task.id, f"Task created: {task_type}", event_type="state")
     return serialize_task(task)
 
 
@@ -301,7 +301,7 @@ def mark_incomplete_tasks_interrupted() -> None:
         ).all()
         for task in tasks:
             task.status = TASK_STATUS_INTERRUPTED
-            task.error = task.error or "任务在服务重启后被中断"
+            task.error = task.error or "Task interrupted after service restart"
             task.finished_at = _utcnow()
             task.updated_at = _utcnow()
             session.add(task)
@@ -309,7 +309,7 @@ def mark_incomplete_tasks_interrupted() -> None:
     for task in tasks:
         append_task_event(
             task.id,
-            "任务在服务重启后被标记为中断",
+            "Task was marked as interrupted after service restart",
             event_type="state",
             level="warning",
         )
@@ -322,7 +322,7 @@ def request_cancel(task_id: str) -> Optional[dict[str, Any]]:
     )
     if not task:
         return None
-    append_task_event(task_id, "已请求取消任务", event_type="state", level="warning")
+    append_task_event(task_id, "Task cancellation requested", event_type="state", level="warning")
     return serialize_task(task)
 
 
@@ -332,7 +332,7 @@ def _request_cancel_mutation(task: TaskModel) -> None:
     if task.status == TASK_STATUS_PENDING:
         task.status = TASK_STATUS_CANCELLED
         task.finished_at = _utcnow()
-        task.error = task.error or "任务在开始前被取消"
+        task.error = task.error or "Task cancelled before starting"
     else:
         task.status = TASK_STATUS_CANCEL_REQUESTED
 
@@ -388,7 +388,7 @@ class TaskLogger:
             task.started_at = task.started_at or _utcnow()
 
         _mutate_task(self.task_id, _update)
-        self.log("任务已开始执行", event_type="state")
+        self.log("Task execution started", event_type="state")
 
     def is_cancel_requested(self) -> bool:
         with Session(engine) as session:
@@ -450,7 +450,7 @@ class TaskLogger:
         _mutate_task(self.task_id, _update)
         event_level = "error" if status == TASK_STATUS_FAILED else ("warning" if status in {TASK_STATUS_INTERRUPTED, TASK_STATUS_CANCELLED} else "info")
         self.log(
-            f"任务结束: {status}",
+            f"Task ended: {status}",
             level=event_level,
             event_type="state",
             detail={"status": status, "error": error},
@@ -458,12 +458,12 @@ class TaskLogger:
 
 
 def _auto_push_any2api(task_logger: TaskLogger, account) -> None:
-    """注册成功后自动推送账号到 Any2API（如果已配置）。"""
+    """Automatically push account to Any2API after successful registration (if configured)."""
     try:
         from core.any2api_sync import push_account_to_any2api
         push_account_to_any2api(account, log_fn=task_logger.log)
     except Exception as exc:
-        task_logger.log(f"  [Any2API] 自动推送异常: {exc}", level="warning")
+        task_logger.log(f"  [Any2API] Auto push exception: {exc}", level="warning")
 
 
 def _auto_upload_cpa(task_logger: TaskLogger, account) -> None:
@@ -494,7 +494,7 @@ def _auto_upload_cpa(task_logger: TaskLogger, account) -> None:
             ok, msg = upload_to_cpa(token_data)
             task_logger.log(f"  [CPA] {'✓ ' + msg if ok else '✗ ' + msg}")
     except Exception as exc:
-        task_logger.log(f"  [CPA] 自动上传异常: {exc}", level="warning")
+        task_logger.log(f"  [CPA] Auto upload exception: {exc}", level="warning")
 
 
 def _build_platform_instance(platform_name: str, payload: dict[str, Any], logger: TaskLogger, resolved_proxy: str | None = None, shared_mailbox=None):
@@ -536,7 +536,7 @@ def _run_single_account_check(account_id: int, logger: TaskLogger | None = None)
     with Session(engine) as session:
         model = session.get(AccountModel, account_id)
         if not model:
-            raise ValueError("账号不存在")
+            raise ValueError("Account does not exist")
         plugin = get(model.platform)(config=RegisterConfig())
         account = build_platform_account(session, model)
 
@@ -563,7 +563,7 @@ def _run_single_account_check(account_id: int, logger: TaskLogger | None = None)
 
     result = {"account_id": account_id, "valid": bool(valid), "platform": account.platform, "email": account.email}
     if logger:
-        logger.log(f"{account.email}: {'有效' if valid else '失效'}")
+        logger.log(f"{account.email}: {'Valid' if valid else 'Invalid'}")
     return valid, result
 
 
@@ -579,7 +579,7 @@ def execute_task(task_id: str) -> None:
     logger.mark_running()
 
     if logger.is_cancel_requested():
-        logger.finish(TASK_STATUS_CANCELLED, error="任务在启动后立即被取消")
+        logger.finish(TASK_STATUS_CANCELLED, error="Task cancelled immediately after starting")
         return
 
     handlers: dict[str, Callable[[dict[str, Any], TaskLogger], None]] = {
@@ -590,7 +590,7 @@ def execute_task(task_id: str) -> None:
     }
     handler = handlers.get(task_type)
     if not handler:
-        logger.finish(TASK_STATUS_FAILED, error=f"未知任务类型: {task_type}")
+        logger.finish(TASK_STATUS_FAILED, error=f"Unknown task type: {task_type}")
         return
     handler(payload, logger)
 
@@ -619,7 +619,7 @@ def _bool_config(value: Any, default: bool) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() not in {"0", "false", "no", "off", "否"}
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _int_config(value: Any, default: int) -> int:
@@ -646,7 +646,7 @@ def _auto_followup_windsurf_payment(
         if not _bool_config(extra_cfg.get("auto_payment_link"), True):
             return
     if not str(getattr(account, "password", "") or "").strip() and use_browser:
-        logger.log("Windsurf 注册后自动升级已跳过: 账号缺少密码", level="error")
+        logger.log("Windsurf post-registration automatic upgrade skipped: Account lacks password", level="error")
         return
     extra = dict(payload.get("extra") or {})
     turnstile_token = str(extra.get("turnstile_token") or "").strip()
@@ -664,16 +664,16 @@ def _auto_followup_windsurf_payment(
         params = {}
         if turnstile_token:
             params["turnstile_token"] = turnstile_token
-    logger.log("注册成功，开始自动生成 Windsurf Pro Trial Stripe 链接")
+    logger.log("Registration successful, starting auto-generation of Windsurf Pro Trial Stripe link")
     try:
         result = platform.execute_action(action_id, account, params)
     except Exception as exc:
-        message = f"Windsurf 注册后自动升级失败: {exc}"
+        message = f"Windsurf post-registration automatic upgrade failed: {exc}"
         logger.record_error(message)
         logger.log(message, level="error")
         return
     if not result.get("ok"):
-        message = f"Windsurf 注册后自动升级失败: {result.get('error') or 'unknown error'}"
+        message = f"Windsurf post-registration automatic upgrade failed: {result.get('error') or 'unknown error'}"
         logger.record_error(message)
         logger.log(message, level="error")
         return
@@ -685,7 +685,7 @@ def _auto_followup_windsurf_payment(
         save_account(account)
     cashier_url = str(data.get("cashier_url") or data.get("url") or "").strip()
     if cashier_url:
-        logger.log(f"Windsurf 自动升级链接已生成: {cashier_url}")
+        logger.log(f"Windsurf automatic upgrade link generated: {cashier_url}")
         logger.add_cashier_url(cashier_url)
 
 
@@ -710,14 +710,14 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     logger.set_progress(0, progress_total)
     if herosms_enabled:
         logger.log(
-            f"HeroSMS 模式: 成功目标 {target_success}，失败自动补尝试，"
-            f"号码仍可复用时最多额外成功 {hero_extra_max} 个"
+            f"HeroSMS Mode: Target success {target_success}, automatic retry on failure, "
+            f"maximum extra successes when number is reusable is {hero_extra_max}"
         )
 
     try:
         get(platform_name)
     except Exception as exc:
-        logger.log(f"致命错误: {exc}", level="error")
+        logger.log(f"Fatal error: {exc}", level="error")
         logger.finish(TASK_STATUS_FAILED, error=str(exc))
         return
 
@@ -743,8 +743,8 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 proxy=proxy or None,
             )
     except Exception as exc:
-        logger.log(f"邮箱初始化失败: {exc}", level="error")
-        logger.finish(TASK_STATUS_FAILED, error=f"邮箱初始化失败: {exc}")
+        logger.log(f"Mailbox initialization failed: {exc}", level="error")
+        logger.finish(TASK_STATUS_FAILED, error=f"Mailbox initialization failed: {exc}")
         return
 
     def _do_one(index: int) -> bool | str:
@@ -753,9 +753,9 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
         resolved_proxy = proxy or proxy_pool.get_next()
         platform = _build_platform_instance(platform_name, payload, logger, resolved_proxy=resolved_proxy, shared_mailbox=shared_mailbox)
         try:
-            logger.log(f"开始注册第 {index + 1}/{count} 个账号")
+            logger.log(f"Starting registration of account {index + 1}/{count}")
             if resolved_proxy:
-                logger.log(f"使用代理: {resolved_proxy}")
+                logger.log(f"Using proxy: {resolved_proxy}")
             account = platform.register(email=email, password=password)
             save_account(account)
             _auto_followup_windsurf_payment(
@@ -768,7 +768,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             if resolved_proxy:
                 proxy_pool.report_success(resolved_proxy)
             logger.record_success()
-            logger.log(f"✓ 注册成功: {account.email}")
+            logger.log(f"✓ Registration successful: {account.email}")
             _save_task_log(platform_name, account.email, "success")
             _auto_upload_cpa(logger, account)
             _auto_push_any2api(logger, account)
@@ -776,7 +776,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             overview = dict(extra.get("account_overview") or {})
             cashier_url = str(extra.get("cashier_url") or overview.get("cashier_url") or "")
             if cashier_url:
-                logger.log(f"  [升级链接] {cashier_url}")
+                logger.log(f"  [Upgrade Link] {cashier_url}")
                 logger.add_cashier_url(cashier_url)
             return True
         except Exception as exc:
@@ -784,7 +784,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 proxy_pool.report_fail(resolved_proxy)
             error = str(exc)
             logger.record_error(error)
-            logger.log(f"✗ 注册失败: {error}", level="error")
+            logger.log(f"✗ Registration failed: {error}", level="error")
             _save_task_log(platform_name, email or "", "failed", error=error)
             return error
 
@@ -802,10 +802,10 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 alive, info = is_herosms_phone_cache_alive(sms_settings)
                 if alive:
                     logger.log(
-                        "HeroSMS 号码仍可复用: "
+                        "HeroSMS number is still reusable: "
                         f"{str(info.get('phone_number') or '')[:5]}**** "
-                        f"剩余 {int(info.get('remaining_seconds') or 0)} 秒，"
-                        f"已成功 {int(info.get('use_count') or 0)} 次"
+                        f"{int(info.get('remaining_seconds') or 0)} seconds remaining, "
+                        f"successful {int(info.get('use_count') or 0)} times"
                     )
                 return bool(alive)
             except Exception:
@@ -846,7 +846,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 if logger.is_cancel_requested() and not futures:
                     break
     except Exception as exc:
-        logger.log(f"致命错误: {exc}", level="error")
+        logger.log(f"Fatal error: {exc}", level="error")
         logger.finish(TASK_STATUS_FAILED, error=str(exc))
         return
 
@@ -859,10 +859,10 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             "extra_success": max(0, success - target_success),
             "hero_sms_reuse": True,
         })
-    summary = f"完成: 成功 {success} 个, 失败 {len(errors)} 个"
+    summary = f"Completed: {success} succeeded, {len(errors)} failed"
     logger.log(summary, event_type="summary")
     if logger.is_cancel_requested():
-        logger.finish(TASK_STATUS_CANCELLED, error="任务已取消")
+        logger.finish(TASK_STATUS_CANCELLED, error="Task cancelled")
         return
     final_status = TASK_STATUS_FAILED if errors and success == 0 else TASK_STATUS_SUCCEEDED
     final_error = "" if final_status == TASK_STATUS_SUCCEEDED else errors[0]
@@ -900,7 +900,7 @@ def _execute_platform_action_task(payload: dict[str, Any], logger: TaskLogger) -
 def _execute_account_check_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     account_id = int(payload.get("account_id", 0) or 0)
     if account_id <= 0:
-        logger.finish(TASK_STATUS_FAILED, error="缺少 account_id")
+        logger.finish(TASK_STATUS_FAILED, error="Missing account_id")
         return
     try:
         _, result = _run_single_account_check(account_id, logger)
@@ -934,7 +934,7 @@ def _execute_account_check_all_task(payload: dict[str, Any], logger: TaskLogger)
     completed = 0
     for model in accounts:
         if logger.is_cancel_requested():
-            logger.finish(TASK_STATUS_CANCELLED, error="任务已取消")
+            logger.finish(TASK_STATUS_CANCELLED, error="Task cancelled")
             return
         try:
             valid, _ = _run_single_account_check(int(model.id or 0), logger)
@@ -945,7 +945,7 @@ def _execute_account_check_all_task(payload: dict[str, Any], logger: TaskLogger)
         except Exception as exc:
             results["error"] += 1
             logger.record_error(str(exc))
-            logger.log(f"{model.email}: 检测异常 {exc}", level="error")
+            logger.log(f"{model.email}: Detection exception {exc}", level="error")
         completed += 1
         logger.set_progress(completed, total)
     logger.set_result_data(results)

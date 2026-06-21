@@ -33,7 +33,7 @@ class ProxiesService:
 
     def trigger_check(self) -> dict:
         threading.Thread(target=proxy_pool.check_all, daemon=True, name="proxy-check").start()
-        return {"message": "检测任务已启动"}
+        return {"message": "Detection task started"}
 
     @staticmethod
     def _serialize(item: ProxyRecord) -> dict:

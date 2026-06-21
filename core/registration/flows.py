@@ -32,16 +32,16 @@ class BrowserRegistrationFlow:
             if capability.oauth_headless_requires_browser_reuse and ctx.executor_type == "headless":
                 ensure_oauth_browser_reuse(
                     ctx,
-                    f"{ctx.platform_display_name} 无头 OAuth 需要配置 chrome_user_data_dir 或 chrome_cdp_url，以便复用本机已登录的浏览器会话",
+                    f"{ctx.platform_display_name} headless OAuth requires chrome_user_data_dir or chrome_cdp_url configured to reuse local logged-in browser sessions",
                 )
             if self.adapter.oauth_runner:
                 raw = self.adapter.oauth_runner(ctx)
                 return self.adapter.result_mapper(ctx, raw)
 
         if self.adapter.capability.browser_mailbox_requires_email:
-            ensure_identity_email(ctx, f"{ctx.platform_display_name} 浏览器模式需要邮箱地址")
+            ensure_identity_email(ctx, f"{ctx.platform_display_name} browser mode requires an email address")
         if self.adapter.capability.browser_mailbox_requires_mailbox:
-            ensure_mailbox_identity(ctx, f"{ctx.platform_display_name} 浏览器邮箱注册依赖 mailbox provider")
+            ensure_mailbox_identity(ctx, f"{ctx.platform_display_name} browser email registration relies on a mailbox provider")
 
         artifacts = RegistrationArtifacts()
         if self.adapter.use_captcha_for_mailbox and getattr(ctx.identity, "identity_provider", "") == "mailbox":
@@ -69,7 +69,7 @@ class BrowserRegistrationFlow:
         try:
             worker = self.adapter.browser_worker_builder(ctx, artifacts) if self.adapter.browser_worker_builder else None
             if worker is None or self.adapter.browser_register_runner is None:
-                raise RuntimeError(f"{ctx.platform_display_name} 未实现浏览器注册适配器")
+                raise RuntimeError(f"{ctx.platform_display_name} browser registration adapter not implemented")
             raw = self.adapter.browser_register_runner(worker, ctx, artifacts)
             artifacts.raw_result = raw
             return self.adapter.result_mapper(ctx, raw)
@@ -86,9 +86,9 @@ class ProtocolMailboxFlow:
         if self.adapter.preflight:
             self.adapter.preflight(ctx)
         if self.adapter.capability.protocol_mailbox_requires_email:
-            ensure_identity_email(ctx, f"{ctx.platform_display_name} 注册流程依赖 mailbox provider，当前未获取到邮箱账号")
+            ensure_identity_email(ctx, f"{ctx.platform_display_name} registration flow relies on mailbox provider, current email account not obtained")
         if self.adapter.capability.protocol_mailbox_requires_mailbox:
-            ensure_mailbox_identity(ctx, f"{ctx.platform_display_name} 注册流程依赖 mailbox provider，当前未获取到邮箱账号")
+            ensure_mailbox_identity(ctx, f"{ctx.platform_display_name} registration flow relies on mailbox provider, current email account not obtained")
 
         artifacts = RegistrationArtifacts()
         if self.adapter.use_captcha:
@@ -135,7 +135,7 @@ class ProtocolOAuthFlow:
         if self.adapter.capability.oauth_headless_requires_browser_reuse and ctx.executor_type == "headless":
             ensure_oauth_browser_reuse(
                 ctx,
-                f"{ctx.platform_display_name} 无头 OAuth 需要配置 chrome_user_data_dir 或 chrome_cdp_url，以便复用本机已登录的浏览器会话",
+                f"{ctx.platform_display_name} headless OAuth requires chrome_user_data_dir or chrome_cdp_url configured to reuse local logged-in browser sessions",
             )
         raw = self.adapter.oauth_runner(ctx)
         return self.adapter.result_mapper(ctx, raw)

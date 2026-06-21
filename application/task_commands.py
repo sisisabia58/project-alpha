@@ -49,7 +49,7 @@ class TaskCommandsService:
 
             current = get_task(task_id)
             if not current:
-                yield f"data: {json.dumps({'done': True, 'status': TASK_STATUS_FAILED, 'line': '任务不存在'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'done': True, 'status': TASK_STATUS_FAILED, 'line': 'Task does not exist'}, ensure_ascii=False)}\n\n"
                 break
             if current["status"] in TERMINAL_TASK_STATUSES:
                 if items:
@@ -58,13 +58,13 @@ class TaskCommandsService:
                 if not terminal_sent:
                     terminal_sent = True
                     if current["status"] == TASK_STATUS_INTERRUPTED:
-                        line = "任务已中断"
+                        line = "Task interrupted"
                     elif current["status"] == TASK_STATUS_CANCELLED:
-                        line = "任务已取消"
+                        line = "Task cancelled"
                     elif current["status"] == TASK_STATUS_FAILED:
-                        line = current.get("error") or "任务失败"
+                        line = current.get("error") or "Task failed"
                     else:
-                        line = "任务已完成"
+                        line = "Task completed"
                     yield f"data: {json.dumps({'done': True, 'status': current['status'], 'line': line}, ensure_ascii=False)}\n\n"
                 break
             if emitted:

@@ -11,16 +11,16 @@ class OtpSpec:
     keyword: str = ""
     timeout: int | None = None
     code_pattern: str | None = None
-    wait_message: str = "等待验证码..."
-    success_label: str = "验证码"
+    wait_message: str = "Waiting for verification code..."
+    success_label: str = "Verification code"
 
 
 @dataclass(slots=True)
 class LinkSpec:
     keyword: str = ""
     timeout: int | None = None
-    wait_message: str = "等待验证链接邮件..."
-    success_label: str = "验证链接"
+    wait_message: str = "Waiting for verification link email..."
+    success_label: str = "Verification link"
     preview_chars: int = 80
 
 
