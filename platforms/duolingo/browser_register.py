@@ -9,10 +9,41 @@ UA = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
+# Chromium flags that prevent renderer crashes in headless / Docker / low-memory environments.
+# --disable-dev-shm-usage : use /tmp instead of /dev/shm (critical on Docker)
+# --disable-gpu           : disables GPU compositing; avoids GPU process crashes
+# --no-zygote             : skip the zygote process to reduce crash surface
+# --no-sandbox            : required when running as root (CI / Docker)
+# --disable-software-rasterizer : fall back to CPU rasterizer without crashing
+# --disable-extensions    : lighter renderer startup
+_LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--no-zygote",
+    "--no-sandbox",
+    "--disable-software-rasterizer",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-default-apps",
+]
+
+
 def _proxy_config(proxy: str | None) -> dict | None:
     if not proxy:
         return None
     return {"server": proxy}
+
+
+def _attach_crash_handler(page: Page) -> None:
+    """Install a listener that turns a silent renderer crash into a readable RuntimeError."""
+    def _on_crash():
+        raise RuntimeError(
+            "Chromium renderer crashed (Page crashed). "
+            "This usually means the process ran out of shared memory or GPU resources. "
+            "Ensure --disable-dev-shm-usage and --disable-gpu are set."
+        )
+    page.on("crash", lambda p: _on_crash())
 
 class DuolingoBrowserRegister:
     def __init__(
@@ -32,18 +63,28 @@ class DuolingoBrowserRegister:
         with sync_playwright() as pw:
             launch_opts = {
                 "headless": self.headless,
-                "args": ["--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage", "--no-sandbox"],
+                "args": _LAUNCH_ARGS,
             }
             p = _proxy_config(self.proxy)
             if p:
                 launch_opts["proxy"] = p
-            
+
             browser = pw.chromium.launch(**launch_opts)
-            context = browser.new_context(viewport={"width": 1280, "height": 800}, user_agent=UA)
+            context = browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent=UA,
+            )
             page = context.new_page()
-            
+            _attach_crash_handler(page)
+
             try:
-                page.goto("https://www.duolingo.com/", wait_until="domcontentloaded", timeout=60000)
+                # Use networkidle so Duolingo's SPA fully boots before we locate buttons.
+                # Falls back to domcontentloaded if networkidle times out (slow networks).
+                try:
+                    page.goto("https://www.duolingo.com/", wait_until="networkidle", timeout=60000)
+                except Exception:
+                    self.log("networkidle timed out — continuing on domcontentloaded")
+                    page.wait_for_timeout(3000)
                 
                 # Check if we are already logged in or if there is a "Get started" button
                 self.log("Clicking 'Get started'...")
@@ -148,20 +189,24 @@ class DuolingoBrowserRegister:
         with sync_playwright() as pw:
             launch_opts = {
                 "headless": self.headless,
-                "args": ["--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage", "--no-sandbox"],
+                "args": _LAUNCH_ARGS,
             }
             p = _proxy_config(self.proxy)
             if p:
                 launch_opts["proxy"] = p
-            
+
             browser = pw.chromium.launch(**launch_opts)
-            context = browser.new_context(viewport={"width": 1280, "height": 800}, user_agent=UA)
-            
+            context = browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent=UA,
+            )
+
             if cookies:
                 context.add_cookies(cookies)
-                
+
             page = context.new_page()
-            
+            _attach_crash_handler(page)
+
             try:
                 # Go to redemption page
                 page.goto("https://www.duolingo.com/redeem", wait_until="domcontentloaded", timeout=60000)
