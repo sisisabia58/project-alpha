@@ -31,10 +31,12 @@ _LAUNCH_ARGS = [
 
 # ---------------------------------------------------------------------------
 # Resource types and URL patterns to block.
-# Blocking images / fonts / media / analytics cuts renderer memory by ~60-70%
-# on heavy SPAs like Duolingo — the single biggest cause of Page crashed.
+# Blocking images / fonts / media cuts renderer memory significantly.
+# NOTE: stylesheet is intentionally NOT blocked — Duolingo's React SPA uses
+# CSS classes to control visibility (display/opacity). Without CSS, buttons
+# never become 'visible' and all locator.wait_for() calls time out.
 # ---------------------------------------------------------------------------
-_BLOCKED_RESOURCE_TYPES = {"image", "media", "font", "stylesheet"}
+_BLOCKED_RESOURCE_TYPES = {"image", "media", "font"}
 _BLOCKED_URL_PATTERNS = [
     "amplitude",
     "analytics",
@@ -234,26 +236,37 @@ class DuolingoBrowserRegister:
 
     def _do_register(self, page: Page, context: BrowserContext, email: str, password: str) -> dict:
         """Execute the full registration flow on an already-configured page."""
-        # Navigate — domcontentloaded is safer than networkidle for crash-prone pages
-        page.goto("https://www.duolingo.com/", wait_until="domcontentloaded", timeout=60000)
-        # Brief pause so React mounts its root components before we query the DOM
+        # Navigate directly to /register to skip the homepage "Get started" button.
+        # This avoids the brittle homepage button selector entirely.
+        self.log("Navigating directly to Duolingo registration page...")
+        page.goto("https://www.duolingo.com/register", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(2000)
 
-        # Click "Get started"
-        self.log("Clicking 'Get started'...")
-        _gs_loc = page.locator('[data-test="get-started"]')
-        if _gs_loc.count() > 0 and _gs_loc.first.is_visible():
-            get_started = _gs_loc.first
-        else:
-            get_started = page.get_by_role("button", name=re.compile(
-                "Get started|开始|开始学习|Bắt đầu|Mulai|Empezar|Começar",
-                re.I
-            )).first
-        get_started.wait_for(state="visible", timeout=15000)
-        get_started.click(timeout=10000)
-        page.wait_for_timeout(1500)
+        # Duolingo may redirect /register → homepage or /onboarding depending on locale/A-B test.
+        # If we land back on the homepage, fall back to clicking "Get started".
+        current_url = page.url
+        self.log(f"Landed on: {current_url}")
 
-        # Handle onboarding wizard
+        if "/register" not in current_url and "/onboarding" not in current_url:
+            # We're on the homepage — try to click the entry button
+            self.log("Redirected to homepage — looking for entry button...")
+            _gs_loc = page.locator('[data-test="get-started"], [data-test="have-account"]')
+            if _gs_loc.count() > 0 and _gs_loc.first.is_visible():
+                _gs_loc.first.click(timeout=10000)
+            else:
+                entry_btn = page.get_by_role("button", name=re.compile(
+                    "Get started|Sign up|Register|Create account|"
+                    "开始|开始学习|Bắt đầu|Mulai|Empezar|Começar|Registrarse|Cadastrar",
+                    re.I
+                )).first
+                try:
+                    entry_btn.wait_for(state="visible", timeout=10000)
+                    entry_btn.click(timeout=10000)
+                except Exception:
+                    self.log("Entry button not found on homepage — attempting onboarding flow anyway")
+            page.wait_for_timeout(1500)
+
+        # Handle onboarding wizard (skipped automatically if /register lands on the form directly)
         self._click_through_onboarding(page)
 
         # Fill registration details
