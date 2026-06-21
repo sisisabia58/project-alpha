@@ -269,48 +269,129 @@ class DuolingoBrowserRegister:
         # Handle onboarding wizard (skipped automatically if /register lands on the form directly)
         self._click_through_onboarding(page)
 
-        # ── Reveal email/password form on /welcome ───────────────────────────
-        # After the onboarding wizard, Duolingo's /welcome page shows social-login
-        # options (Google, Apple, Facebook) PLUS a "Sign up with email" button.
-        # The actual input fields only appear AFTER clicking that button.
-        self.log("Looking for 'Sign up with email' button to reveal form...")
-        _email_signup_btn = page.get_by_role("button", name=re.compile(
-            r"Sign up with email|Use email|Continue with email|Create account with email|"
-            r"Daftar dengan email|Đăng ký bằng email|Registrarse con correo|Criar conta com e-mail|"
-            r"用邮箱注册|用电子邮件注册",
-            re.I
-        )).first
-        # Also try by href/link patterns (Duolingo sometimes uses an <a> tag)
-        _email_signup_link = page.locator(
-            'a[href*="email"], button[data-test*="email"], [data-test="email-signup-button"]'
-        ).first
+        # ── Diagnostic: log what's actually on the page ──────────────────────
+        # This helps us understand the /welcome page structure
+        self.log(f"Current page: {page.url} | title: {page.title()}")
+        try:
+            _btn_texts = []
+            for _b in page.locator("button, a[role='button'], [role='button']").all():
+                try:
+                    if _b.is_visible():
+                        _t = (_b.inner_text() or "").strip()[:60]
+                        if _t:
+                            _btn_texts.append(_t)
+                except Exception:
+                    pass
+            self.log(f"Visible interactive elements: {_btn_texts}")
+            _inp_info = []
+            for _inp in page.locator("input").all():
+                try:
+                    if _inp.is_visible():
+                        _inp_info.append(_inp.get_attribute("type") or "text")
+                except Exception:
+                    pass
+            self.log(f"Visible inputs: {_inp_info}")
+        except Exception:
+            pass
 
-        _clicked_email_btn = False
-        for _candidate in [_email_signup_btn, _email_signup_link]:
+        # ── Strategy: reveal the email/password form ──────────────────────────
+        # Duolingo's /welcome page may show:
+        #   A) Social login options + "Sign up with email" button → click it
+        #   B) A welcome screen with just "Continue" → click it, then reach the form
+        #   C) The form is already rendered (less common)
+        _clicked_entry = False
+
+        # Try 1: any element whose text contains "email" (broadest match)
+        for _sel in [
+            'button:has-text("email")',
+            'a:has-text("email")',
+            '[data-test*="email"]',
+            'button[data-test*="email"]',
+        ]:
             try:
-                if _candidate.is_visible():
-                    self.log("Clicking 'Sign up with email'...")
-                    _candidate.click(timeout=5000)
+                _loc = page.locator(_sel).first
+                if _loc.count() > 0 and _loc.is_visible():
+                    self.log(f"Clicking email signup element ({_sel})...")
+                    _loc.click(timeout=5000)
                     page.wait_for_timeout(2000)
-                    _clicked_email_btn = True
+                    _clicked_entry = True
                     break
             except Exception:
                 continue
 
-        if not _clicked_email_btn:
-            self.log("No 'Sign up with email' button found — form may already be visible")
+        # Try 2: by role=button or role=link with any "email" in the accessible name
+        if not _clicked_entry:
+            for _role in ("button", "link"):
+                try:
+                    _loc = page.get_by_role(_role, name=re.compile(r"email", re.I)).first
+                    if _loc.is_visible():
+                        self.log(f"Clicking email signup ({_role} by role)...")
+                        _loc.click(timeout=5000)
+                        page.wait_for_timeout(2000)
+                        _clicked_entry = True
+                        break
+                except Exception:
+                    continue
 
-        # ── Fill registration details ─────────────────────────────────────────
+        # Try 3: click any "Continue" button on the welcome page (transitional screen)
+        if not _clicked_entry:
+            self.log("No email button found — clicking Continue on welcome screen...")
+            for _dt in ["register-button", "continue-button", "next-button"]:
+                _loc = page.locator(f'[data-test="{_dt}"]')
+                if _loc.count() > 0:
+                    try:
+                        _loc.first.wait_for(state="visible", timeout=2000)
+                        _loc.first.click(timeout=5000)
+                        page.wait_for_timeout(2000)
+                        _clicked_entry = True
+                        break
+                    except Exception:
+                        pass
+            if not _clicked_entry:
+                _cont = page.get_by_role("button", name=re.compile(
+                    r"Continue|Next|Get started|OK|Start|Done|Lanjut|Tiếp tục|Continuar|Começar",
+                    re.I
+                )).first
+                try:
+                    if _cont.is_visible():
+                        _cont.click(timeout=5000)
+                        page.wait_for_timeout(2000)
+                        _clicked_entry = True
+                except Exception:
+                    pass
+
+        # Try 4: navigate directly to the email registration path
+        if not _clicked_entry:
+            self.log("Trying direct navigation to email sign-up form...")
+            page.goto("https://www.duolingo.com/register?referrer=https://www.duolingo.com/welcome",
+                      wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(2000)
+
+        # ── Wait for the email input to appear ────────────────────────────────
         self.log("Filling profile registration form...")
-
-        # Wait for the email input to actually appear before filling anything
-        _email_input = page.locator('input[type="email"]').first
+        # Duolingo may use type="email" OR type="text" with autocomplete="email"
+        _email_input_sel = (
+            'input[type="email"], '
+            'input[autocomplete*="email" i], '
+            'input[name*="email" i], '
+            'input[placeholder*="email" i], '
+            'input[placeholder*="邮箱" i], '
+            'input[placeholder*="Email" i]'
+        )
+        _email_input = page.locator(_email_input_sel).first
         try:
             _email_input.wait_for(state="visible", timeout=15000)
         except Exception as e:
+            # Log page state one more time for final diagnosis
+            try:
+                _final_btns = [_b.inner_text()[:40] for _b in page.locator("button").all() if _b.is_visible()]
+                _final_inps = [_i.get_attribute("type") or "?" for _i in page.locator("input").all() if _i.is_visible()]
+                self.log(f"Final page state — URL: {page.url} | buttons: {_final_btns} | inputs: {_final_inps}")
+            except Exception:
+                pass
             raise RuntimeError(
-                f"Email input never appeared on {page.url} after clicking 'Sign up with email'. "
-                f"The form may have a different structure. Original error: {e}"
+                f"Email input never appeared on {page.url}. "
+                f"Duolingo may have changed its registration flow. Original error: {e}"
             )
 
         # Optional: age / birthday field (some variants omit it)
