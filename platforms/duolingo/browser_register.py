@@ -1,7 +1,7 @@
 import re
 import random
 from typing import Callable, Optional, List, Dict
-from playwright.sync_api import Page, sync_playwright
+from patchright.sync_api import Page, sync_playwright
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -47,7 +47,12 @@ class DuolingoBrowserRegister:
                 
                 # Check if we are already logged in or if there is a "Get started" button
                 self.log("Clicking 'Get started'...")
-                get_started = page.get_by_role("button", name=re.compile("Get started|开始|开始学习", re.I)).first
+                get_started = page.locator('[data-test="get-started"]').first
+                if not get_started.count() or not get_started.is_visible():
+                    get_started = page.get_by_role("button", name=re.compile(
+                        "Get started|开始|开始学习|Bắt đầu|Mulai|Empezar|Começar", 
+                        re.I
+                    )).first
                 get_started.click(timeout=10000)
                 page.wait_for_timeout(2000)
                 
@@ -56,11 +61,11 @@ class DuolingoBrowserRegister:
                 
                 # Fill registration details
                 self.log("Filling profile registration form...")
-                age_input = page.locator('input[placeholder*="Age" i], input[type="number"]').first
+                age_input = page.locator('input[placeholder*="Age" i], input[placeholder*="Tuổi" i], input[placeholder*="Edad" i], input[placeholder*="Umur" i], input[placeholder*="Idade" i], input[placeholder*="年龄" i], input[type="number"]').first
                 age_input.wait_for(state="visible", timeout=15000)
                 age_input.fill(str(random.randint(22, 45)))
                 
-                name_input = page.locator('input[placeholder*="Name" i], input[placeholder*="姓名" i]').first
+                name_input = page.locator('input[placeholder*="Name" i], input[placeholder*="姓名" i], input[placeholder*="Tên" i], input[placeholder*="Nombre" i], input[placeholder*="Nome" i], input[placeholder*="Nama" i]').first
                 if name_input.count() and name_input.is_visible():
                     name_input.fill(email.split("@")[0])
                 
@@ -69,7 +74,12 @@ class DuolingoBrowserRegister:
                 
                 # Submit form
                 self.log("Submitting registration profile...")
-                submit_btn = page.get_by_role("button", name=re.compile("Create profile|创建账号|确认|完成", re.I)).first
+                submit_btn = page.locator('[data-test="register-button"]').first
+                if not submit_btn.count() or not submit_btn.is_visible():
+                    submit_btn = page.get_by_role("button", name=re.compile(
+                        "Create profile|Create account|创建账号|确认|完成|Tạo hồ sơ|Tạo tài khoản|Buat profil|Buat akun|Crear perfil|Crear cuenta|Criar perfil|Criar conta", 
+                        re.I
+                    )).first
                 submit_btn.click()
                 
                 # Wait for successful navigation to main page
@@ -133,25 +143,25 @@ class DuolingoBrowserRegister:
                 if "/log-in" in page.url or "/register" in page.url or page.locator('input[type="email"]').count() > 0:
                     self.log("Stored cookies expired or invalid. Attempting direct login...")
                     page.goto("https://www.duolingo.com/log-in", wait_until="domcontentloaded", timeout=60000)
-                    email_input = page.locator('input[type="email"], input[placeholder*="Email" i], input[placeholder*="邮箱" i]').first
+                    email_input = page.locator('input[type="email"], input[placeholder*="Email" i], input[placeholder*="username" i], input[placeholder*="邮箱" i], input[placeholder*="Tên đăng nhập" i], input[placeholder*="Nama pengguna" i]').first
                     email_input.wait_for(state="visible", timeout=15000)
                     email_input.fill(email)
                     
-                    pass_input = page.locator('input[type="password"], input[placeholder*="Password" i], input[placeholder*="密码" i]').first
+                    pass_input = page.locator('input[type="password"], input[placeholder*="Password" i], input[placeholder*="密码" i], input[placeholder*="mật khẩu" i], input[placeholder*="kata sandi" i], input[placeholder*="contraseña" i], input[placeholder*="senha" i]').first
                     pass_input.fill(password)
                     
-                    login_btn = page.get_by_role("button", name=re.compile("Log in|登录", re.I)).first
+                    login_btn = page.get_by_role("button", name=re.compile("Log in|登录|Đăng nhập|Masuk|Iniciar sesión|Entrar", re.I)).first
                     login_btn.click()
                     page.wait_for_url(re.compile(r"/learn"), timeout=45000)
                     page.goto("https://www.duolingo.com/redeem", wait_until="domcontentloaded", timeout=60000)
-
+ 
                 # Fill and submit code
                 self.log(f"Locating redeem code field and inputting: {referral_code}")
-                code_input = page.locator('input[placeholder*="code" i], input[type="text"]').first
+                code_input = page.locator('input[placeholder*="code" i], input[placeholder*="mã" i], input[placeholder*="código" i], input[type="text"]').first
                 code_input.wait_for(state="visible", timeout=15000)
                 code_input.fill(referral_code)
                 
-                redeem_btn = page.get_by_role("button", name=re.compile("Redeem|Submit|Claim|兑换|确认", re.I)).first
+                redeem_btn = page.get_by_role("button", name=re.compile("Redeem|Submit|Claim|兑换|确认|Áp dụng|Klaim|Canjear|Resgatar", re.I)).first
                 redeem_btn.click()
                 
                 self.log("Waiting for code redemption response...")
@@ -196,7 +206,12 @@ class DuolingoBrowserRegister:
                     page.wait_for_timeout(800)
                 
                 # Click Continue/Next
-                btn = page.get_by_role("button", name=re.compile("Continue|Next|Confirm|Get started|继续|下一步|开始", re.I)).first
+                btn = page.locator('[data-test="register-button"]').first
+                if not btn.count() or not btn.is_visible() or not btn.is_enabled():
+                    btn = page.get_by_role("button", name=re.compile(
+                        "Continue|Next|Confirm|Get started|继续|下一步|开始|Tiếp tục|Lanjut|Continuar|Confirmar|Bắt đầu|Mulai|Empezar|Começar", 
+                        re.I
+                    )).first
                 if btn.count() and btn.is_visible() and btn.is_enabled():
                     self.log(f"Step {step}: Clicking Continue/Next button...")
                     btn.click(timeout=5000, force=True)
