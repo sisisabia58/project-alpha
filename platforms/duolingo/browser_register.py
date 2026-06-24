@@ -49,9 +49,35 @@ _BLOCKED_URL_PATTERNS = [
 
 
 def _proxy_config(proxy: str | None) -> dict | None:
+    """
+    Build a Playwright proxy dict from a URL like:
+      http://user:pass@host:port
+      socks5://user:pass@host:port
+      http://host:port   (no auth)
+
+    Playwright requires credentials as separate 'username'/'password' keys,
+    not embedded in the server URL — so we always parse and split them out.
+    """
     if not proxy:
         return None
-    return {"server": proxy}
+    import urllib.parse
+    try:
+        parsed = urllib.parse.urlparse(proxy)
+        scheme   = parsed.scheme or "http"
+        host     = parsed.hostname or ""
+        port     = parsed.port
+        username = urllib.parse.unquote(parsed.username or "")
+        password = urllib.parse.unquote(parsed.password or "")
+        server   = f"{scheme}://{host}:{port}" if port else f"{scheme}://{host}"
+        cfg: dict = {"server": server}
+        if username:
+            cfg["username"] = username
+        if password:
+            cfg["password"] = password
+        return cfg
+    except Exception:
+        # Fallback: pass raw string (may not work with auth)
+        return {"server": proxy}
 
 
 def _block_heavy_resources(page: Page) -> None:
@@ -155,6 +181,9 @@ class DuolingoBrowserRegister:
                     p = _proxy_config(self.proxy)
                     if p:
                         launch_opts["proxy"] = p
+                        self.log(f"Using proxy: {p.get('server')} (user={p.get('username', 'none')})")
+                    else:
+                        self.log("No proxy configured — using direct connection")
 
                     browser = pw.chromium.launch(**launch_opts)
                     context = browser.new_context(
