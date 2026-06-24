@@ -593,6 +593,15 @@ class DuolingoBrowserRegister:
                     f"Registration API {_r['status']} {_r['url'][:80]} "
                     f"→ {_r['body']}"
                 )
+            # ── Fail fast on API 4xx / 5xx ─────────────────────────────────
+            # A 403 means Duolingo rejected the registration (bot detection,
+            # expired JWT, or IP block). Don't proceed — this is NOT a success.
+            for _r in _api_responses:
+                if _r['status'] in (403, 401, 429, 500):
+                    raise RuntimeError(
+                        f"Registration API returned {_r['status']} — "
+                        f"account was NOT created. Response: {_r['body'][:200]}"
+                    )
         if _api_requests:
             for _req in _api_requests:
                 _hdrs = {k: v[:60] for k, v in _req["headers"].items()
@@ -639,9 +648,6 @@ class DuolingoBrowserRegister:
             pass
 
         # ── Navigate to /learn to confirm auth cookies were set ───────────
-        # Registration is complete when the API returns 200 — the UI redirect
-        # is optional. Navigate directly so we don't wait for a redirect that
-        # may never arrive.
         self.log("Navigating to /learn to confirm registration...")
         page.goto(
             "https://www.duolingo.com/learn",
@@ -656,6 +662,26 @@ class DuolingoBrowserRegister:
                 f"Registration may have failed — /learn redirected to: {final_url}. "
                 f"Check form errors in logs above."
             )
+
+        # Extra guard: if SIGN IN / CREATE ACCOUNT buttons are visible on /learn,
+        # the browser is in GUEST mode — the registration did not persist.
+        try:
+            _guest_indicators = [
+                page.get_by_role("button", name=re.compile(r"sign.?in|create.*account|create.*profile", re.I)).first,
+                page.locator('[data-test="have-account"]').first,
+                page.locator('[data-test="get-started-top"]').first,
+            ]
+            for _gi in _guest_indicators:
+                if _gi.is_visible():
+                    raise RuntimeError(
+                        "Landed on /learn but browser is in GUEST mode "
+                        "(login buttons visible) — registration was not saved. "
+                        f"URL: {final_url}"
+                    )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass  # indicator check failed non-fatally
 
         self.log(f"Registration SUCCESS! Landed on: {final_url}")
 
