@@ -335,60 +335,70 @@ class DuolingoBrowserRegister:
         self.log("Clicking BUAT AKUN (register-button)...")
         _reg_btn = page.locator('[data-test="register-button"]')
         _reg_btn.wait_for(state="visible", timeout=10000)
+        _reg_btn.click()
+        self.log("Register button clicked — waiting for API response...")
 
-        # Use expect_navigation with domcontentloaded to avoid the renderer
-        # crashing during the heavy /learn page 'load' event.
-        # The default 'load' waits for ALL resources (images, scripts) which
-        # overwhelms the renderer when running headless with limited memory.
-        # NOTE: Duolingo now routes through /?isLoggingIn=true as an intermediate
-        # step before the final /learn or /home destination. We use a broad pattern
-        # that accepts this intermediate URL, then poll until the final URL is reached.
-        self.log("Waiting for post-registration redirect (domcontentloaded)...")
-        _SUCCESS_PATTERN = re.compile(
-            r"duolingo\.com/(learn|home|email-verification|onboarding)"
-        )
-        _INTERMEDIATE_PATTERN = re.compile(
-            r"duolingo\.com/(learn|home|email-verification|onboarding|\?isLoggingIn)"
-        )
+        # Duolingo's registration API sets auth cookies immediately on success
+        # but does NOT always trigger a hard browser navigation.
+        # Strategy:
+        #   1. Wait 4s for the API call to complete
+        #   2. Check for visible form errors (wrong password format, email taken, etc.)
+        #   3. Navigate directly to /learn — if cookies are set, we'll be logged in
+        #   4. Verify the /learn page is accessible (not redirected back to login)
+        page.wait_for_timeout(4000)
+
+        # ── Detect form validation errors ─────────────────────────────────
+        _form_errors = []
         try:
-            with page.expect_navigation(
-                url=_INTERMEDIATE_PATTERN,
-                wait_until="domcontentloaded",
-                timeout=60000,
-            ):
-                _reg_btn.click()
-        except Exception as _nav_err:
-            _nav_err_s = str(_nav_err).lower()
-            if "crashed" in _nav_err_s or "page crash" in _nav_err_s:
-                raise  # let the outer retry loop handle it
-            # Non-crash navigation exception — might be a timing mismatch.
-            # Fall back to a simple URL poll to confirm success.
-            self.log(f"Navigation wait failed ({_nav_err}) — polling URL...")
+            for _err_sel in [
+                '[data-test="registration-error"]',
+                '[data-test*="error"]',
+                '[role="alert"]',
+                'span[class*="text-red" i]',
+                'div[class*="error" i]',
+            ]:
+                for _el in page.locator(_err_sel).all():
+                    try:
+                        if _el.is_visible():
+                            _txt = (_el.inner_text() or "").strip()
+                            if _txt and len(_txt) > 2:
+                                _form_errors.append(_txt[:120])
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
-        # Poll for the final destination (past any ?isLoggingIn=true intermediate)
-        import time as _time
-        _deadline = _time.time() + 60
-        while _time.time() < _deadline:
-            try:
-                _cur = page.url
-                if _SUCCESS_PATTERN.search(_cur):
-                    break
-                if "isLoggingIn" in _cur:
-                    # Intermediate redirect — Duolingo is still processing login;
-                    # wait a moment and let it continue navigating.
-                    self.log(f"Intermediate redirect detected ({_cur}), waiting...")
-                    page.wait_for_timeout(2000)
-                    continue
-            except Exception:
-                pass
-            page.wait_for_timeout(1000)
-        else:
-            raise RuntimeError(
-                f"Registration did not navigate to expected URL. "
-                f"Current: {page.url}."
-            )
+        if _form_errors:
+            # Log them for diagnosis then fail clearly
+            self.log(f"Form validation errors: {_form_errors}")
+            raise RuntimeError(f"Registration rejected by Duolingo: {_form_errors}")
+
+        # ── Log page state for diagnosis ──────────────────────────────────
+        try:
+            _btns = [_b.inner_text()[:30] for _b in page.locator("button").all() if _b.is_visible()]
+            self.log(f"Post-submit URL: {page.url} | visible buttons: {_btns}")
+        except Exception:
+            pass
+
+        # ── Navigate to /learn to confirm auth cookies were set ───────────
+        # Registration is complete when the API returns 200 — the UI redirect
+        # is optional. Navigate directly so we don't wait for a redirect that
+        # may never arrive.
+        self.log("Navigating to /learn to confirm registration...")
+        page.goto(
+            "https://www.duolingo.com/learn",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+        page.wait_for_timeout(2000)
 
         final_url = page.url
+        if not re.search(r"duolingo\.com/(learn|home)", final_url):
+            raise RuntimeError(
+                f"Registration may have failed — /learn redirected to: {final_url}. "
+                f"Check form errors in logs above."
+            )
+
         self.log(f"Registration SUCCESS! Landed on: {final_url}")
 
         # ── Email verification (optional) ─────────────────────────────────
