@@ -245,55 +245,190 @@ class DuolingoBrowserRegister:
         Execute registration then optional referral redemption.
 
         Recorded Playwright steps (exact data-test selectors):
-          1. [data-test="have-account"]    — "I already have an account" on homepage
-          2. [data-test="sign-up-button"]  — "Sign up" link on the login page
-          3. [data-test="age-input"]       — age field (Berapa umurmu?)
-          4. [data-test="continue-button"] — Next / BERIKUTNYA
-          5. [data-test="full-name-input"] — Nama (opsional)
-          6. [data-test="email-input"]     — Email
-          7. [data-test="password-input"]  — Kata sandi
-          8. [data-test="register-button"] — BUAT AKUN / Create account
-          9. goto /redeem                  — (if referral_code provided)
-         10. textbox "Enter code"          — paste referral code
-         11. button "REDEEM NOW"
-         12. button "Claim offer"
+          1. [data-test="get-started-top"] — "GET STARTED" on homepage
+          2. [data-test="funboarding-continue-button"] — Onboarding steps
+          3. [data-test="close-button"]    — Close onboarding modal
+          4. [data-test="create-profile-juicy"] — "BUAT PROFIL"
+          5. [data-test="age-input"]       — age field (Berapa umurmu?)
+          6. [data-test="continue-button"] — Next / BERIKUTNYA
+          7. [data-test="full-name-input"] — Nama (opsional)
+          8. [data-test="email-input"]     — Email
+          9. [data-test="password-input"]  — Kata sandi
+         10. [data-test="register-button"] — BUAT AKUN / Create account
+         11. goto /redeem                  — (if referral_code provided)
+         12. textbox "Enter code"          — paste referral code
+         13. button "REDEEM NOW"
+         14. button "Claim offer"
         """
 
         # ── Step 1: Homepage ──────────────────────────────────────────────
         self.log("Navigating to Duolingo homepage...")
         page.goto("https://www.duolingo.com/", wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(3000)  # Allow Duolingo JS to fully initialise
         self.log(f"Landed on: {page.url}")
 
-        # ── Step 2: Click "I already have an account" ─────────────────────
-        # This navigates to the login page where a sign-up link is also present.
-        # Using this path bypasses the entire onboarding wizard.
-        self.log("Clicking 'I already have an account' (have-account)...")
-        _have_acct = page.locator('[data-test="have-account"]')
-        _have_acct.wait_for(state="visible", timeout=15000)
-        _have_acct.click(timeout=8000)
+        # ── Steps 2–8: Onboarding state machine ──────────────────────────
+        # Duolingo's onboarding flow varies by A/B test variant. Instead of
+        # a rigid step sequence, we use a state machine: at each iteration
+        # we check what's visible and take the right action, until we reach
+        # the age-input (terminal state).
+        #
+        # WHY GET STARTED is required: clicking it (and advancing through the
+        # onboarding) triggers Duolingo's guest user creation which sets the
+        # jwt_token cookie. The registration POST to /2023-05-23/users returns
+        # 401 without this JWT.
+
+        self.log("Clicking GET STARTED (initialises guest session / JWT)...")
+        _get_started = page.locator('[data-test="get-started-top"]').first
+        _get_started.wait_for(state="visible", timeout=15000)
+        _get_started.click(timeout=8000)
         page.wait_for_timeout(2000)
 
-        # ── Step 3: Click "Sign up" on the login page ─────────────────────
-        self.log("Clicking Sign up (sign-up-button)...")
-        _signup = page.locator('[data-test="sign-up-button"]')
-        _signup.wait_for(state="visible", timeout=10000)
-        _signup.click(timeout=8000)
-        page.wait_for_timeout(2000)
+        self.log("Advancing through onboarding (state machine)...")
+        for _sn in range(30):
+            page.wait_for_timeout(1200)
 
-        # ── Step 4: Age form ──────────────────────────────────────────────
-        # Field: [data-test="age-input"]  placeholder: "Umur" / "Age"
-        # Button: [data-test="continue-button"]  — disabled until age entered
+            # Terminal: age form
+            if page.locator('[data-test="age-input"]').is_visible():
+                self.log(f"[{_sn}] Reached age form")
+                break
+            # Terminal: registration form (rare)
+            if page.locator('[data-test="full-name-input"]').is_visible():
+                self.log(f"[{_sn}] Already at registration form")
+                break
+
+            _acted = False
+
+            # P0: Cookie consent / notification banners (highest priority)
+            # These overlays block all other clicks if not dismissed first.
+            if not _acted:
+                for _dismiss_txt in [
+                    "accept cookies", "reject all", "accepteer", "i agree",
+                    "tolak semua", "terima semua", "setuju",
+                ]:
+                    _cb = page.get_by_role(
+                        "button", name=re.compile(_dismiss_txt, re.I)
+                    ).first
+                    if _cb.is_visible():
+                        self.log(f"[{_sn}] Dismissing banner ('{_dismiss_txt}') -> click")
+                        _cb.click()
+                        page.wait_for_timeout(1000)
+                        _acted = True
+                        break
+
+            # P1: BUAT PROFIL (creates jwt_token)
+            # Use force=True to click through any overlay that may be covering it.
+            if not _acted:
+                _bp = page.locator('[data-test="create-profile-juicy"]').first
+                if _bp.is_visible():
+                    self.log(f"[{_sn}] BUAT PROFIL -> force-click")
+                    try:
+                        _bp.click(force=True, timeout=5000)
+                    except Exception:
+                        # Fallback: JS click to bypass overlay
+                        page.evaluate(
+                            "document.querySelector('[data-test=\"create-profile-juicy\"]').click()"
+                        )
+                    page.wait_for_timeout(4000)  # Allow overlay to clear before next check
+                    _acted = True
+
+            # P2: Language card
+            if not _acted:
+                _lc = page.locator('[data-test*="language-card"]').first
+                if _lc.is_visible():
+                    self.log(f"[{_sn}] Language card -> click")
+                    _lc.click()
+                    page.wait_for_timeout(1500)
+                    _acted = True
+
+            # P3: Funboarding continue
+            if not _acted:
+                _fc = page.locator('[data-test="funboarding-continue-button"]').first
+                if _fc.is_visible() and _fc.is_enabled():
+                    self.log(f"[{_sn}] Funboarding continue -> click")
+                    _fc.click()
+                    page.wait_for_timeout(1500)
+                    _acted = True
+                elif _fc.is_visible() and not _fc.is_enabled():
+                    # Disabled continue: need to select a goal/reason card first
+                    for _opt_sel in [
+                        '[data-test*="reason"]', '[data-test*="goal"]',
+                        '[data-test*="motivation"]', '[data-test*="option"]',
+                    ]:
+                        _opt = page.locator(_opt_sel).first
+                        if _opt.is_visible():
+                            self.log(f"[{_sn}] Option card (enables continue) -> click")
+                            _opt.click()
+                            page.wait_for_timeout(800)
+                            _acted = True
+                            break
+
+            # P4: Close button (dismiss any modal to advance state)
+            if not _acted:
+                _cl = page.locator('[data-test="close-button"]').first
+                if _cl.is_visible():
+                    self.log(f"[{_sn}] Close modal -> click")
+                    _cl.click()
+                    page.wait_for_timeout(1500)
+                    _acted = True
+
+            # P4.5: Survey / choice pages (e.g. /welcome?welcomeStep=hdyhau)
+            # CONTINUE is visible but disabled — must click an icon-only option
+            # card first to make a selection (radio-button style).
+            if not _acted:
+                _any_cont = page.get_by_role(
+                    "button", name=re.compile(r"continue|berikutnya|lanjutkan", re.I)
+                ).first
+                if _any_cont.is_visible() and not _any_cont.is_enabled():
+                    _all_icon = page.get_by_role("button").filter(
+                        has_text=re.compile(r"^\s*$")
+                    ).all()
+                    for _ib in _all_icon:
+                        if _ib.is_visible():
+                            self.log(f"[{_sn}] Survey option (icon btn, enables continue) -> click")
+                            _ib.click()
+                            page.wait_for_timeout(800)
+                            _acted = True
+                            break
+
+            # P5: Generic continue/next by button text
+            if not _acted:
+                for _txt in ["lanjutkan", "continue", "next", "selanjutnya", "berikutnya"]:
+                    _gb = page.get_by_role("button", name=re.compile(_txt, re.I)).first
+                    if _gb.is_visible() and _gb.is_enabled():
+                        self.log(f"[{_sn}] '{_txt}' button -> click")
+                        _gb.click()
+                        page.wait_for_timeout(1500)
+                        _acted = True
+                        break
+
+            if not _acted:
+                try:
+                    _vis = [b.inner_text()[:30] for b in page.locator("button").all()
+                            if b.is_visible()]
+                    self.log(f"[{_sn}] Stuck. Buttons: {_vis} | URL: {page.url}")
+                except Exception:
+                    pass
+        else:
+            raise RuntimeError("Could not reach age form after 30 onboarding steps")
+
+        # Log JWT status
+        try:
+            _jwt_c = {c["name"]: c["value"][:40] for c in context.cookies()
+                      if c["name"] in ("jwt_token", "duo_jwt", "logged_out_uuid")}
+            self.log(f"Session cookies at age form: {_jwt_c}")
+        except Exception:
+            pass
+
+        # Age form
         self.log("Filling age form...")
         _age = page.locator('[data-test="age-input"]')
-        _age.wait_for(state="visible", timeout=10000)
         _age_val = str(random.randint(22, 35))
         _age.fill(_age_val)
         self.log(f"Age: {_age_val}")
 
         _cont = page.locator('[data-test="continue-button"]')
-        # Poll until continue-button enables (it activates after valid age is typed)
-        for _ in range(15):
+        for _ in range(20):
             if _cont.is_enabled():
                 break
             page.wait_for_timeout(300)
@@ -301,13 +436,13 @@ class DuolingoBrowserRegister:
         self.log("Age continue clicked.")
         page.wait_for_timeout(2000)
 
-        # ── Step 5–7: Registration form ────────────────────────────────────
-        # Same URL, new modal: Buat profilmu / Create your profile
-        # Note: password must be ≥8 chars with uppercase + number/symbol
+        # ── Steps 7–9: Registration form ───────────────────────────────────
+        # Modal: Buat profilmu / Create your profile
+        # Reached after: GET STARTED → onboarding → close → BUAT PROFIL → age → continue
         self.log("Filling registration form...")
 
         _name = page.locator('[data-test="full-name-input"]')
-        _name.wait_for(state="visible", timeout=12000)
+        _name.wait_for(state="visible", timeout=20000)
         _name.fill(email.split("@")[0])
         self.log(f"Name: {email.split('@')[0]}")
 
@@ -325,17 +460,78 @@ class DuolingoBrowserRegister:
         self.log("Clicking BUAT AKUN (register-button)...")
         _reg_btn = page.locator('[data-test="register-button"]')
         _reg_btn.wait_for(state="visible", timeout=10000)
+
+        # Intercept the registration API request AND response to diagnose 401
+        _api_responses: list[dict] = []
+        _api_requests:  list[dict] = []
+
+        def _on_request(req):
+            try:
+                if "2023-05-23/users" in req.url or "api/1/user" in req.url:
+                    _api_requests.append({
+                        "url":     req.url,
+                        "method":  req.method,
+                        "headers": dict(req.headers),
+                    })
+            except Exception:
+                pass
+
+        def _on_response(resp):
+            try:
+                if "2023-05-23/users" in resp.url or "api/1/user" in resp.url:
+                    try:
+                        body = resp.text()
+                    except Exception:
+                        body = "(could not read body)"
+                    _api_responses.append({
+                        "url":    resp.url,
+                        "status": resp.status,
+                        "body":   body[:500],
+                    })
+            except Exception:
+                pass
+
+        page.on("request",  _on_request)
+        page.on("response", _on_response)
+
+        # Log cookies present just before clicking — 401 usually means a
+        # session/CSRF cookie is missing that should have been set during
+        # the sign-up flow.
+        try:
+            _cookies_before = {c["name"]: c["value"][:40] for c in context.cookies()
+                               if c["name"] in (
+                                   "jwt_token", "csrf_token", "__cf_bm",
+                                   "logged_out_uuid", "session", "duo_auth",
+                               )}
+            self.log(f"Auth cookies before submit: {_cookies_before}")
+        except Exception:
+            pass
+
         _reg_btn.click()
         self.log("Register button clicked — waiting for API response...")
 
         # Duolingo's registration API sets auth cookies immediately on success
         # but does NOT always trigger a hard browser navigation.
-        # Strategy:
-        #   1. Wait 4s for the API call to complete
-        #   2. Check for visible form errors (wrong password format, email taken, etc.)
-        #   3. Navigate directly to /learn — if cookies are set, we'll be logged in
-        #   4. Verify the /learn page is accessible (not redirected back to login)
         page.wait_for_timeout(4000)
+
+        # ── Log captured API responses (definitive diagnosis) ─────────────
+        if _api_responses:
+            for _r in _api_responses:
+                self.log(
+                    f"Registration API {_r['status']} {_r['url'][:80]} "
+                    f"→ {_r['body']}"
+                )
+        if _api_requests:
+            for _req in _api_requests:
+                _hdrs = {k: v[:60] for k, v in _req["headers"].items()
+                         if k.lower() in ("authorization", "x-csrf-token", "cookie",
+                                          "origin", "referer", "content-type")}
+                self.log(f"Registration REQ headers: {_hdrs}")
+        else:
+            self.log(
+                "WARNING: No registration API call was captured — "
+                "request may have been blocked client-side (reCAPTCHA, disabled button, etc.)"
+            )
 
         # ── Detect form validation errors ─────────────────────────────────
         _form_errors = []
