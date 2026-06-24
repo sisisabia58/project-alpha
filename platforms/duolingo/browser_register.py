@@ -15,9 +15,8 @@ UA = (
 _LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--disable-dev-shm-usage",
-    "--disable-gpu",
+    "--disable-gpu",           # use software renderer (SwiftShader) — no hardware GPU crash
     "--no-sandbox",
-    "--disable-software-rasterizer",
     "--disable-extensions",
     "--disable-background-networking",
     "--disable-default-apps",
@@ -25,17 +24,16 @@ _LAUNCH_ARGS = [
     "--disable-prompt-on-repost",
     "--metrics-recording-only",
     "--mute-audio",
-    # ── Animation / WebGL suppression ──────────────────────────────────────
-    # Duolingo uses Lottie + WebGL canvas animations (Duo mascot) between each
-    # sign-up step. These overwhelm the headless renderer and cause crashes.
-    "--disable-webgl",                      # kill WebGL context (Lottie fallback)
-    "--disable-webgl2",                     # kill WebGL2
-    "--disable-3d-apis",                    # no 3D canvas at all
-    "--disable-gpu-compositing",            # software compositing only
-    "--disable-accelerated-2d-canvas",      # software 2D canvas
-    "--disable-canvas-aa",                  # no canvas anti-aliasing
-    "--renderer-process-limit=1",           # single renderer process
-    "--disable-features=VizDisplayCompositor,IsolateOrigins",
+    # ── Memory / stability ─────────────────────────────────────────────────
+    # NOTE: Do NOT add --disable-webgl, --disable-3d-apis, --disable-software-rasterizer
+    # or --renderer-process-limit=1 here.
+    # reCAPTCHA Enterprise uses WebGL canvas fingerprinting to score the browser.
+    # Blocking WebGL → reCAPTCHA score ~0.1 → Duolingo silently rejects registration.
+    # With --disable-gpu, WebGL runs via SwiftShader (software) which is stable
+    # and gives reCAPTCHA enough signal to score us as human.
+    "--disable-gpu-compositing",         # software compositing
+    "--disable-accelerated-2d-canvas",   # lower 2D canvas memory
+    "--disable-webgl2",                  # WebGL2 uses extra memory; WebGL1 kept for reCAPTCHA
 ]
 
 # ---------------------------------------------------------------------------
@@ -70,23 +68,15 @@ def _block_heavy_resources(page: Page) -> None:
 
 
 _ANIMATION_KILL_SCRIPT = """
-// Throttle requestAnimationFrame to ~5 fps — stops Lottie/canvas loops from
-// consuming CPU and crashing the renderer between sign-up modal transitions.
+// Throttle requestAnimationFrame to ~5 fps.
+// This slows Duolingo's Lottie mascot animations enough to prevent renderer
+// memory spikes during modal transitions, WITHOUT touching WebGL or canvas.
+// reCAPTCHA Enterprise needs WebGL/canvas for fingerprinting — do NOT block it.
 (function() {
-    var _raf = window.requestAnimationFrame.bind(window);
     window.requestAnimationFrame = function(cb) {
         return setTimeout(function() { cb(performance.now()); }, 200);
     };
     window.cancelAnimationFrame = clearTimeout;
-
-    // Null out WebGL so Lottie cannot use GPU canvas
-    var _getCtx = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = function(type) {
-        if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
-            return null;
-        }
-        return _getCtx.apply(this, arguments);
-    };
 })();
 """
 
@@ -96,7 +86,7 @@ _ANIMATION_KILL_CSS = """
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
 }
-canvas { display: none !important; }
+/* canvas intentionally NOT hidden — reCAPTCHA Enterprise uses canvas fingerprinting */
 """
 
 
