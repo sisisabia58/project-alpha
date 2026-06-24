@@ -659,16 +659,25 @@ class DuolingoBrowserRegister:
 
         self.log(f"Registration SUCCESS! Landed on: {final_url}")
 
-        # ── Email verification (optional) ─────────────────────────────────
+        # ── Email verification (optional / non-fatal) ─────────────────────
+        # Duolingo accounts are active immediately after the registration API
+        # returns 200. Email verification is not required for the account to
+        # work — skip gracefully if the callback times out or is unavailable.
         if self.verification_link_callback:
             self.log("Requesting email verification link...")
-            confirm_url = self.verification_link_callback()
-            self.log(f"Navigating to verification link: {confirm_url}")
-            confirm_page = context.new_page()
-            _block_heavy_resources(confirm_page)
-            confirm_page.goto(confirm_url, wait_until="domcontentloaded", timeout=60000)
-            confirm_page.wait_for_timeout(3000)
-            confirm_page.close()
+            try:
+                confirm_url = self.verification_link_callback()
+                if confirm_url:
+                    self.log(f"Navigating to verification link: {confirm_url}")
+                    confirm_page = context.new_page()
+                    _block_heavy_resources(confirm_page)
+                    confirm_page.goto(confirm_url, wait_until="domcontentloaded", timeout=60000)
+                    confirm_page.wait_for_timeout(3000)
+                    confirm_page.close()
+                else:
+                    self.log("No verification link returned — skipping (account is already active)")
+            except Exception as _ve:
+                self.log(f"Email verification skipped (non-fatal): {_ve}")
 
         # ── Step 9–12: Referral code redemption (same session) ────────────
         redeem_result = None
