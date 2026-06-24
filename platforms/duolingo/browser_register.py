@@ -285,6 +285,7 @@ class DuolingoBrowserRegister:
         page.wait_for_timeout(2000)
 
         self.log("Advancing through onboarding (state machine)...")
+        _buat_profil_clicked = False
         for _sn in range(30):
             page.wait_for_timeout(1200)
 
@@ -298,6 +299,47 @@ class DuolingoBrowserRegister:
                 break
 
             _acted = False
+
+            # P-1: If we drifted onto /learn before registration, click the
+            # Duolingo in-page X/back button (top-left corner of page).
+            # The button contains a broken <img>, so we use JS to traverse
+            # up to the real clickable container and dispatch a click event.
+            if not _acted and not _buat_profil_clicked and "/learn" in page.url:
+                self.log(f"[{_sn}] On /learn placement test — clicking back button via JS...")
+                try:
+                    _js_result = page.evaluate("""() => {
+                        // Check a few candidate positions for the back button
+                        for (const [cx, cy] of [[27,27],[32,32],[20,20],[15,15]]) {
+                            let el = document.elementFromPoint(cx, cy);
+                            // Traverse up to find the nearest clickable ancestor
+                            let node = el;
+                            while (node && node !== document.body) {
+                                if (node.tagName === 'BUTTON' || node.tagName === 'A' ||
+                                    node.getAttribute('role') === 'button' ||
+                                    node.getAttribute('role') === 'link') {
+                                    node.dispatchEvent(
+                                        new MouseEvent('click', {bubbles:true, cancelable:true})
+                                    );
+                                    return node.tagName + '@' + cx + ',' + cy;
+                                }
+                                node = node.parentElement;
+                            }
+                        }
+                        // Fallback: click the very first button in the DOM
+                        const first = document.querySelector('button');
+                        if (first) { first.click(); return 'first-button'; }
+                        return 'none';
+                    }""")
+                    self.log(f"[{_sn}] JS back click result: {_js_result}")
+                except Exception as _e:
+                    self.log(f"[{_sn}] JS back click failed: {_e}")
+                    # Last resort: Alt+Left keyboard shortcut (browser back)
+                    try:
+                        page.keyboard.press("Alt+ArrowLeft")
+                    except Exception:
+                        pass
+                page.wait_for_timeout(2000)
+                _acted = True
 
             # P0: Cookie consent / notification banners (highest priority)
             # These overlays block all other clicks if not dismissed first.
@@ -317,20 +359,25 @@ class DuolingoBrowserRegister:
                         break
 
             # P1: BUAT PROFIL (creates jwt_token)
-            # Use force=True to click through any overlay that may be covering it.
-            if not _acted:
+            # Click ONCE with force=True to bypass overlay, then wait for age form.
+            # Subsequent iterations skip P1 so we don't spam-click while the
+            # page transitions from the overlay state to the age form.
+            if not _acted and not _buat_profil_clicked:
                 _bp = page.locator('[data-test="create-profile-juicy"]').first
                 if _bp.is_visible():
-                    self.log(f"[{_sn}] BUAT PROFIL -> force-click")
+                    self.log(f"[{_sn}] BUAT PROFIL -> force-click (waiting for age form...)")
                     try:
                         _bp.click(force=True, timeout=5000)
                     except Exception:
-                        # Fallback: JS click to bypass overlay
                         page.evaluate(
                             "document.querySelector('[data-test=\"create-profile-juicy\"]').click()"
                         )
-                    page.wait_for_timeout(4000)  # Allow overlay to clear before next check
+                    _buat_profil_clicked = True
+                    page.wait_for_timeout(4000)  # Allow transition to age form
                     _acted = True
+            elif not _acted and _buat_profil_clicked:
+                # Already clicked — just wait; age form will appear
+                _acted = True  # suppress "Stuck" log; we're just waiting
 
             # P2: Language card
             if not _acted:
@@ -372,24 +419,38 @@ class DuolingoBrowserRegister:
                     page.wait_for_timeout(1500)
                     _acted = True
 
-            # P4.5: Survey / choice pages (e.g. /welcome?welcomeStep=hdyhau)
-            # CONTINUE is visible but disabled — must click an icon-only option
-            # card first to make a selection (radio-button style).
+            # P4.5: Survey / choice pages — CONTINUE visible but disabled.
+            # Two sub-cases:
+            #   a) Icon-only option buttons (hdyhau survey)
+            #   b) Text option buttons (proficiency: "I'm new to Spanish", etc.)
             if not _acted:
                 _any_cont = page.get_by_role(
                     "button", name=re.compile(r"continue|berikutnya|lanjutkan", re.I)
                 ).first
                 if _any_cont.is_visible() and not _any_cont.is_enabled():
-                    _all_icon = page.get_by_role("button").filter(
+                    # (a) Icon-only buttons first
+                    for _ib in page.get_by_role("button").filter(
                         has_text=re.compile(r"^\s*$")
-                    ).all()
-                    for _ib in _all_icon:
+                    ).all():
                         if _ib.is_visible():
-                            self.log(f"[{_sn}] Survey option (icon btn, enables continue) -> click")
+                            self.log(f"[{_sn}] Survey option (icon) -> click")
                             _ib.click()
                             page.wait_for_timeout(800)
                             _acted = True
                             break
+                    # (b) Text option buttons (not the continue button itself)
+                    if not _acted:
+                        _skip_re = re.compile(r"continue|berikutnya|lanjutkan|back|kembali", re.I)
+                        for _tb in page.locator("button").all():
+                            if not _tb.is_visible() or not _tb.is_enabled():
+                                continue
+                            _t = (_tb.inner_text() or "").strip()
+                            if _t and not _skip_re.match(_t):
+                                self.log(f"[{_sn}] Text option '{_t[:30]}' -> click")
+                                _tb.click()
+                                page.wait_for_timeout(800)
+                                _acted = True
+                                break
 
             # P5: Generic continue/next by button text
             if not _acted:
@@ -406,7 +467,18 @@ class DuolingoBrowserRegister:
                 try:
                     _vis = [b.inner_text()[:30] for b in page.locator("button").all()
                             if b.is_visible()]
-                    self.log(f"[{_sn}] Stuck. Buttons: {_vis} | URL: {page.url}")
+                    if not _vis:
+                        # No visible buttons at all — page may be loading or stuck
+                        # on a screen with non-button elements. Go back as last resort.
+                        self.log(f"[{_sn}] No visible buttons at {page.url} — going back...")
+                        try:
+                            page.go_back(wait_until="domcontentloaded", timeout=15000)
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(1500)
+                        _acted = True
+                    else:
+                        self.log(f"[{_sn}] Stuck. Buttons: {_vis} | URL: {page.url}")
                 except Exception:
                     pass
         else:
